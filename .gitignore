@@ -1,1 +1,10 @@
 .vscode/
+__pycache__/
+*.pyc
+.cache/
+wandb/
+runs/
+outputs/
+*.log
+unsloth_compiled_cache/
+*-lora/
