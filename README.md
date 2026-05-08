@@ -66,6 +66,7 @@ SFT 的本质是 next-token prediction，不是“调用 API 学会聊天”。�
 ## 文件地图
 
 - `src/study_sft/formats.py`：三种文本协议的核心格式化逻辑。
+- `src/study_sft/agentic_context.py`：实验期最小 Agentic JSON 安全序列化与复用 encoder 原型；公开入口收敛为 `AgenticContextEncoder` 对象 API，loss 标注仍是 message-level。
 - `src/preview_data.py`：预览数据行如何变成训练文本。
 - `src/train_sft.py`：Unsloth + TRL + LoRA/QLoRA 训练入口。
 - `src/infer_lora.py`：加载 LoRA adapter 做快速生成验证。
