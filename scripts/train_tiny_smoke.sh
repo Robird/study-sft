@@ -4,8 +4,7 @@ set -euo pipefail
 CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0} python src/train_sft.py \
   --dataset_path examples/tiny_alpaca.jsonl \
   --dataset_format alpaca \
-  --prompt_mode chatml \
-  --output_dir /mnt/fast/LLM/study-sft/smoke-chatml-lora \
+  --output_dir /mnt/fast/LLM/study-sft/smoke-agentic-lora \
   --max_steps 5 \
   --per_device_train_batch_size 1 \
   --gradient_accumulation_steps 1 \
@@ -15,6 +14,7 @@ CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0} python src/train_sft.py \
   --save_steps 5 \
   --save_total_limit 1 \
   --max_length 1024 \
+  --validate_encoding true \
   --load_in_4bit false \
   --report_to none \
   "$@"
