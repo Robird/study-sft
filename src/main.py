@@ -19,9 +19,10 @@ def main() -> None:
                 "  bash scripts/train_tiny_smoke.sh",
                 "",
                 "Main training entrypoints:",
-                "  bash scripts/train_alpaca_chatml.sh",
-                "  bash scripts/train_alpaca_late_system.sh",
-                "  bash scripts/train_alpaca_bora.sh",
+                "  bash scripts/train_alpaca_agentic.sh",
+                "",
+                "Main inference entrypoint:",
+                "  bash scripts/infer_smoke_adapter.sh",
                 "",
                 "Read README.md for the learning map and experiment design.",
             ]

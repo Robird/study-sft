@@ -1,8 +1,4 @@
-"""LoRA/QLoRA SFT training script for the study-sft lab.
-
-The default path is intentionally close to the already-verified Unsloth setup in
-/repos/study-base-llm, with one extra axis: prompt_mode.
-"""
+"""LoRA/QLoRA training script for agentic-context SFT."""
 
 from __future__ import annotations
 
@@ -14,46 +10,67 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
 
-try:
-    from unsloth import FastLanguageModel, is_bfloat16_supported
-except ImportError as exc:
-    raise SystemExit("Unsloth 未安装。请先在当前环境安装 unsloth。") from exc
-
 import torch
-from datasets import Dataset, IterableDataset, load_dataset, load_from_disk
-from transformers import set_seed
-from trl import SFTConfig, SFTTrainer
+from datasets import Dataset
+from transformers import Trainer, TrainingArguments, set_seed
 
-from study_sft.formats import (
-    DEFAULT_BORA_REASONING,
-    DEFAULT_SYSTEM_PROMPT,
-    DatasetFormat,
-    PromptMode,
-    format_sft_text,
+from study_sft.cli_args import (
+    add_belief_prompt_arg,
+    add_dataset_format_arg,
+    add_dataset_source_args,
+    add_model_source_args,
+    add_optional_bool_arg,
 )
+from study_sft.agentic_context import AgenticContextEncoder
+from study_sft.loaders import (
+    DEFAULT_MODEL_NAME_OR_PATH,
+    ensure_tokenizer_pad_token,
+    get_effective_pad_token_id,
+    load_base_tokenizer,
+    load_dataset_source,
+)
+from study_sft.samples import DEFAULT_BELIEF_PROMPT, DatasetFormat
+from study_sft.training_data import TrainingEncodingConfig, TrainingLabelPolicy
+from study_sft.training_dataset import (
+    DatasetLocator,
+    TrainingDatasetBuildOptions,
+    prepare_training_dataset,
+    tokenizer_identity_payload,
+)
+from study_sft.training_runtime import AgenticDataCollator
 
-torch.backends.cuda.matmul.allow_tf32 = True
-torch.set_float32_matmul_precision("medium")
 
 LOGGER = logging.getLogger(__name__)
+DEFAULT_LORA_TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+
+def _require_unsloth():
+    try:
+        from unsloth import FastLanguageModel, is_bfloat16_supported
+    except ImportError as exc:
+        raise SystemExit("Unsloth 未安装。请先在当前环境安装 unsloth。") from exc
+    return FastLanguageModel, is_bfloat16_supported
+
+
+def configure_torch_runtime() -> None:
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.set_float32_matmul_precision("medium")
 
 
 @dataclass
 class ScriptArguments:
-    model_name_or_path: str = "/mnt/fast/LLM/Qwen3-1.7B-Base"
+    model_name_or_path: str = DEFAULT_MODEL_NAME_OR_PATH
     local_files_only: bool = True
     dataset_name: Optional[str] = None
     dataset_config: Optional[str] = None
     dataset_path: Optional[str] = None
     dataset_split: str = "train"
-    dataset_streaming: bool = False
     dataset_format: DatasetFormat = "alpaca"
-    prompt_mode: PromptMode = "chatml"
-    system_prompt: str = DEFAULT_SYSTEM_PROMPT
-    bora_reasoning: str = DEFAULT_BORA_REASONING
+    belief_prompt: str = DEFAULT_BELIEF_PROMPT
     limit_train_samples: Optional[int] = None
+    label_policy: TrainingLabelPolicy = "message"
 
-    output_dir: str = "/mnt/fast/LLM/study-sft/qwen3-1.7b-chatml-lora"
+    output_dir: str = "/mnt/fast/LLM/study-sft/qwen3-1.7b-agentic-lora"
     overwrite_output_dir: bool = False
     seed: int = 42
 
@@ -80,69 +97,57 @@ class ScriptArguments:
     bias: str = "none"
     load_in_4bit: bool = False
     max_length: int = 2048
-    packing: bool = False
+    validate_encoding: bool = False
     dataloader_num_workers: int = 2
     ddp_find_unused_parameters: bool = False
     report_to: str = "none"
     lora_merge: bool = False
-
-
-def str2bool(value: str | bool) -> bool:
-    if isinstance(value, bool):
-        return value
-    lowered = value.lower()
-    if lowered in {"yes", "true", "t", "1", "y"}:
-        return True
-    if lowered in {"no", "false", "f", "0", "n"}:
-        return False
-    raise argparse.ArgumentTypeError(f"无法解析布尔值: {value}")
+    cache_train_dataset: bool = True
+    train_dataset_cache_dir: Optional[str] = ".cache/study_sft/train_datasets"
 
 
 def parse_args() -> ScriptArguments:
+    defaults = ScriptArguments()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model_name_or_path", default=ScriptArguments.model_name_or_path)
-    parser.add_argument("--local_files_only", nargs="?", const=True, type=str2bool, default=True)
-    parser.add_argument("--dataset_name")
-    parser.add_argument("--dataset_config")
-    parser.add_argument("--dataset_path")
-    parser.add_argument("--dataset_split", default="train")
-    parser.add_argument("--dataset_streaming", type=str2bool, default=False)
-    parser.add_argument("--dataset_format", choices=["alpaca", "messages", "sharegpt", "text"], default="alpaca")
-    parser.add_argument("--prompt_mode", choices=["chatml", "late_system", "bora"], default="chatml")
-    parser.add_argument("--system_prompt", default=DEFAULT_SYSTEM_PROMPT)
-    parser.add_argument("--bora_reasoning", default=DEFAULT_BORA_REASONING)
+    add_model_source_args(parser, default_model_name=defaults.model_name_or_path)
+    add_dataset_source_args(parser)
+    add_dataset_format_arg(parser)
+    add_belief_prompt_arg(parser)
     parser.add_argument("--limit_train_samples", type=int)
+    parser.add_argument("--label_policy", choices=["message", "payload_only"], default=defaults.label_policy)
 
-    parser.add_argument("--output_dir", default=ScriptArguments.output_dir)
+    parser.add_argument("--output_dir", default=defaults.output_dir)
     parser.add_argument("--overwrite_output_dir", action="store_true")
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--num_train_epochs", type=float, default=1.0)
-    parser.add_argument("--max_steps", type=int, default=-1)
-    parser.add_argument("--per_device_train_batch_size", type=int, default=2)
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=8)
-    parser.add_argument("--learning_rate", type=float, default=1e-4)
-    parser.add_argument("--optim", default="adamw_torch")
-    parser.add_argument("--weight_decay", type=float, default=0.0)
-    parser.add_argument("--warmup_ratio", type=float, default=0.03)
-    parser.add_argument("--max_grad_norm", type=float, default=1.0)
-    parser.add_argument("--logging_steps", type=int, default=10)
-    parser.add_argument("--save_steps", type=int, default=100)
-    parser.add_argument("--save_total_limit", type=int, default=2)
-    parser.add_argument("--gradient_checkpointing", action="store_true", default=True)
-    parser.add_argument("--bf16", action="store_true", default=True)
-    parser.add_argument("--fp16", action="store_true")
-    parser.add_argument("--lora_r", type=int, default=32)
-    parser.add_argument("--lora_alpha", type=int, default=32)
-    parser.add_argument("--lora_dropout", type=float, default=0.05)
+    parser.add_argument("--seed", type=int, default=defaults.seed)
+    parser.add_argument("--num_train_epochs", type=float, default=defaults.num_train_epochs)
+    parser.add_argument("--max_steps", type=int, default=defaults.max_steps)
+    parser.add_argument("--per_device_train_batch_size", type=int, default=defaults.per_device_train_batch_size)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=defaults.gradient_accumulation_steps)
+    parser.add_argument("--learning_rate", type=float, default=defaults.learning_rate)
+    parser.add_argument("--optim", default=defaults.optim)
+    parser.add_argument("--weight_decay", type=float, default=defaults.weight_decay)
+    parser.add_argument("--warmup_ratio", type=float, default=defaults.warmup_ratio)
+    parser.add_argument("--max_grad_norm", type=float, default=defaults.max_grad_norm)
+    parser.add_argument("--logging_steps", type=int, default=defaults.logging_steps)
+    parser.add_argument("--save_steps", type=int, default=defaults.save_steps)
+    parser.add_argument("--save_total_limit", type=int, default=defaults.save_total_limit)
+    add_optional_bool_arg(parser, "--gradient_checkpointing", default=defaults.gradient_checkpointing)
+    add_optional_bool_arg(parser, "--bf16", default=defaults.bf16)
+    add_optional_bool_arg(parser, "--fp16", default=defaults.fp16)
+    parser.add_argument("--lora_r", type=int, default=defaults.lora_r)
+    parser.add_argument("--lora_alpha", type=int, default=defaults.lora_alpha)
+    parser.add_argument("--lora_dropout", type=float, default=defaults.lora_dropout)
     parser.add_argument("--lora_target_modules")
-    parser.add_argument("--bias", default="none")
-    parser.add_argument("--load_in_4bit", nargs="?", const=True, type=str2bool, default=False)
-    parser.add_argument("--max_length", type=int, default=2048)
-    parser.add_argument("--packing", action="store_true")
-    parser.add_argument("--dataloader_num_workers", type=int, default=2)
-    parser.add_argument("--ddp_find_unused_parameters", type=str2bool, default=False)
-    parser.add_argument("--report_to", default="none")
+    parser.add_argument("--bias", default=defaults.bias)
+    add_optional_bool_arg(parser, "--load_in_4bit", default=defaults.load_in_4bit)
+    parser.add_argument("--max_length", type=int, default=defaults.max_length)
+    add_optional_bool_arg(parser, "--validate_encoding", default=defaults.validate_encoding)
+    parser.add_argument("--dataloader_num_workers", type=int, default=defaults.dataloader_num_workers)
+    add_optional_bool_arg(parser, "--ddp_find_unused_parameters", default=defaults.ddp_find_unused_parameters)
+    parser.add_argument("--report_to", default=defaults.report_to)
     parser.add_argument("--lora_merge", action="store_true")
+    add_optional_bool_arg(parser, "--cache_train_dataset", default=defaults.cache_train_dataset)
+    parser.add_argument("--train_dataset_cache_dir", default=defaults.train_dataset_cache_dir)
     return ScriptArguments(**vars(parser.parse_args()))
 
 
@@ -154,93 +159,27 @@ def setup_logging() -> None:
     )
 
 
-def load_model_and_tokenizer(args: ScriptArguments):
-    LOGGER.info("使用 Unsloth 加载模型: %s", args.model_name_or_path)
-    target_modules = (
-        [name.strip() for name in args.lora_target_modules.split(",") if name.strip()]
-        if args.lora_target_modules
-        else ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
-    )
+def resolve_lora_target_modules(args: ScriptArguments) -> list[str]:
+    if not args.lora_target_modules:
+        return list(DEFAULT_LORA_TARGET_MODULES)
+    return [name.strip() for name in args.lora_target_modules.split(",") if name.strip()]
 
+
+def resolve_gradient_checkpointing_mode(args: ScriptArguments) -> bool | str:
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
-    gradient_checkpointing = "unsloth" if args.gradient_checkpointing and world_size <= 1 else args.gradient_checkpointing
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=args.model_name_or_path,
-        max_seq_length=args.max_length,
-        dtype=None,
-        load_in_4bit=args.load_in_4bit,
-        use_gradient_checkpointing=gradient_checkpointing,
-        local_files_only=args.local_files_only,
-        disable_log_stats=True,
-    )
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    model = FastLanguageModel.get_peft_model(
-        model,
-        r=args.lora_r,
-        lora_alpha=args.lora_alpha,
-        lora_dropout=args.lora_dropout,
-        target_modules=target_modules,
-        bias=args.bias,
-        use_gradient_checkpointing=gradient_checkpointing,
-        random_state=args.seed,
-        use_rslora=False,
-        loftq_config=None,
-    )
-    model.print_trainable_parameters()
-    return model, tokenizer
+    if args.gradient_checkpointing and world_size <= 1:
+        return "unsloth"
+    return args.gradient_checkpointing
 
 
-def load_any_dataset(args: ScriptArguments):
-    if args.dataset_path:
-        path = Path(args.dataset_path)
-        LOGGER.info("从本地路径加载数据集: %s", path)
-        if path.is_file():
-            return load_dataset("json", data_files=str(path), split=args.dataset_split)
-        return load_from_disk(str(path))
-    if not args.dataset_name:
-        raise ValueError("必须指定 --dataset_path 或 --dataset_name")
-    LOGGER.info("从 Hub 加载数据集: %s", args.dataset_name)
-    return load_dataset(
-        args.dataset_name,
-        args.dataset_config,
-        split=args.dataset_split,
-        streaming=args.dataset_streaming,
-    )
-
-
-def format_dataset(args: ScriptArguments, dataset):
-    def add_text(record: dict) -> dict[str, str]:
-        return {
-            "text": format_sft_text(
-                record,
-                dataset_format=args.dataset_format,
-                prompt_mode=args.prompt_mode,
-                default_system=args.system_prompt,
-                bora_reasoning=args.bora_reasoning,
-            )
-        }
-
-    if isinstance(dataset, IterableDataset):
-        mapped = dataset.map(add_text)
-        if args.limit_train_samples:
-            mapped = mapped.take(args.limit_train_samples)
-        return mapped
-
-    if args.limit_train_samples:
-        dataset = dataset.select(range(min(args.limit_train_samples, len(dataset))))
-    remove_columns = list(dataset.column_names)
-    return dataset.map(add_text, remove_columns=remove_columns, desc="format SFT text")
-
-
-def build_trainer(args: ScriptArguments, model, tokenizer, train_dataset: Dataset | IterableDataset) -> SFTTrainer:
+def build_training_args(args: ScriptArguments) -> TrainingArguments:
+    _, is_bfloat16_supported = _require_unsloth()
     report_to = "none" if args.report_to.lower() == "none" else args.report_to
     bf16_enabled = args.bf16 and is_bfloat16_supported()
     fp16_enabled = args.fp16 and not bf16_enabled
-
-    training_args = SFTConfig(
+    return TrainingArguments(
         output_dir=args.output_dir,
+        overwrite_output_dir=args.overwrite_output_dir,
         num_train_epochs=args.num_train_epochs,
         max_steps=args.max_steps,
         per_device_train_batch_size=args.per_device_train_batch_size,
@@ -259,21 +198,59 @@ def build_trainer(args: ScriptArguments, model, tokenizer, train_dataset: Datase
         report_to=report_to,
         dataloader_num_workers=args.dataloader_num_workers,
         ddp_find_unused_parameters=args.ddp_find_unused_parameters,
-        max_length=args.max_length,
-        packing=args.packing,
-        dataset_text_field="text",
         seed=args.seed,
+        remove_unused_columns=False,
     )
-    if training_args.eos_token in (None, "<EOS_TOKEN>"):
-        training_args.eos_token = tokenizer.eos_token
-    if training_args.pad_token in (None, "<PAD_TOKEN>"):
-        training_args.pad_token = tokenizer.pad_token or tokenizer.eos_token
 
-    return SFTTrainer(
+
+def load_model_and_tokenizer(args: ScriptArguments):
+    FastLanguageModel, _ = _require_unsloth()
+    LOGGER.info("使用 Unsloth 加载模型: %s", args.model_name_or_path)
+    target_modules = resolve_lora_target_modules(args)
+    gradient_checkpointing = resolve_gradient_checkpointing_mode(args)
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name=args.model_name_or_path,
+        max_seq_length=args.max_length,
+        dtype=None,
+        load_in_4bit=args.load_in_4bit,
+        use_gradient_checkpointing=gradient_checkpointing,
+        local_files_only=args.local_files_only,
+        disable_log_stats=True,
+    )
+    ensure_tokenizer_pad_token(tokenizer)
+
+    model = FastLanguageModel.get_peft_model(
+        model,
+        r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=args.lora_dropout,
+        target_modules=target_modules,
+        bias=args.bias,
+        use_gradient_checkpointing=gradient_checkpointing,
+        random_state=args.seed,
+        use_rslora=False,
+        loftq_config=None,
+    )
+    model.print_trainable_parameters()
+    return model, tokenizer
+
+
+def assert_matching_training_tokenizer(
+    encoded_dataset_encoder: AgenticContextEncoder,
+    training_tokenizer,
+) -> None:
+    training_encoder = AgenticContextEncoder(training_tokenizer)
+    if tokenizer_identity_payload(encoded_dataset_encoder) != tokenizer_identity_payload(training_encoder):
+        raise ValueError("训练 tokenizer 与预编码 tokenizer 不一致，无法安全复用已编码数据")
+
+
+def build_trainer(args: ScriptArguments, model, tokenizer, train_dataset: Dataset) -> Trainer:
+    return Trainer(
         model=model,
-        args=training_args,
-        processing_class=tokenizer,
+        args=build_training_args(args),
+        data_collator=AgenticDataCollator(get_effective_pad_token_id(tokenizer)),
         train_dataset=train_dataset,
+        processing_class=tokenizer,
     )
 
 
@@ -295,40 +272,106 @@ def get_last_checkpoint(output_dir: str) -> str | None:
     return str(checkpoint) if (checkpoint / "trainer_state.json").exists() else None
 
 
-def maybe_merge_and_save(trainer: SFTTrainer, args: ScriptArguments) -> None:
+def resolve_resume_checkpoint(output_dir: str, *, overwrite_output_dir: bool) -> str | None:
+    if overwrite_output_dir:
+        return None
+    output = Path(output_dir)
+    if not output.exists() or not any(output.iterdir()):
+        return None
+    last_checkpoint = get_last_checkpoint(output_dir)
+    if last_checkpoint is None:
+        raise ValueError(f"输出目录已存在且非空，请使用新目录或传入 --overwrite_output_dir: {output_dir}")
+    return last_checkpoint
+
+
+def build_train_dataset(
+    args: ScriptArguments,
+    encoder: AgenticContextEncoder,
+) -> Dataset:
+    build_options = TrainingDatasetBuildOptions(
+        validate_encoding=args.validate_encoding,
+        limit_train_samples=args.limit_train_samples,
+        cache_dir=(
+            Path(args.train_dataset_cache_dir)
+            if args.cache_train_dataset and args.train_dataset_cache_dir
+            else None
+        ),
+    )
+    dataset_locator = DatasetLocator(
+        dataset_path=args.dataset_path,
+        dataset_name=args.dataset_name,
+        dataset_config=args.dataset_config,
+        dataset_split=args.dataset_split,
+    )
+    raw_dataset = load_dataset_source(
+        dataset_path=args.dataset_path,
+        dataset_name=args.dataset_name,
+        dataset_config=args.dataset_config,
+        dataset_split=args.dataset_split,
+        logger=LOGGER,
+    )
+    return prepare_training_dataset(
+        raw_dataset,
+        encoder=encoder,
+        encoding_config=TrainingEncodingConfig(
+            dataset_format=args.dataset_format,
+            default_belief_prompt=args.belief_prompt,
+            max_length=args.max_length,
+            label_policy=args.label_policy,
+        ),
+        build_options=build_options,
+        dataset_locator=dataset_locator,
+        logger=LOGGER,
+    )
+
+
+def maybe_merge_and_save(trainer: Trainer, tokenizer, args: ScriptArguments) -> None:
     if not args.lora_merge:
         return
     merged_dir = Path(args.output_dir) / "merged"
     merged_dir.mkdir(parents=True, exist_ok=True)
     trainer.model.save_pretrained_merged(
         str(merged_dir),
-        trainer.tokenizer,
+        tokenizer,
         save_method="merged_16bit",
     )
     LOGGER.info("已保存合并模型: %s", merged_dir)
 
 
 def main() -> None:
+    configure_torch_runtime()
     setup_logging()
     args = parse_args()
     LOGGER.info("参数配置:\n%s", json.dumps(asdict(args), ensure_ascii=False, indent=2))
     set_seed(args.seed)
 
+    last_checkpoint = resolve_resume_checkpoint(
+        args.output_dir,
+        overwrite_output_dir=args.overwrite_output_dir,
+    )
+
+    base_tokenizer = load_base_tokenizer(
+        args.model_name_or_path,
+        local_files_only=args.local_files_only,
+    )
+    dataset_encoder = AgenticContextEncoder(base_tokenizer)
+    train_dataset = build_train_dataset(args, dataset_encoder)
+    if len(train_dataset) == 0:
+        raise ValueError("编码后的训练集为空，请检查数据源或 --limit_train_samples")
     model, tokenizer = load_model_and_tokenizer(args)
-    raw_dataset = load_any_dataset(args)
-    train_dataset = format_dataset(args, raw_dataset)
+    assert_matching_training_tokenizer(dataset_encoder, tokenizer)
     trainer = build_trainer(args, model, tokenizer, train_dataset)
 
-    last_checkpoint = get_last_checkpoint(args.output_dir)
     if last_checkpoint:
         LOGGER.info("检测到 checkpoint，将恢复训练: %s", last_checkpoint)
 
     train_result = trainer.train(resume_from_checkpoint=last_checkpoint)
     trainer.save_model()
+    tokenizer.save_pretrained(args.output_dir)
     trainer.save_state()
     trainer.log_metrics("train", train_result.metrics)
     trainer.save_metrics("train", train_result.metrics)
-    maybe_merge_and_save(trainer, args)
+    maybe_merge_and_save(trainer, tokenizer, args)
     LOGGER.info("训练完成: %s", args.output_dir)
 
 
