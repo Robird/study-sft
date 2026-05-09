@@ -1,3 +1,13 @@
+# 历史概念手稿
+# 这个文件保留最初的直觉原型，不再承担当前 v0 规范说明。
+# 当前规范与层次划分见：
+#   - docs/agentic-context-format-design.md
+# 当前 XML authoring worked example 见：
+#   - examples/xml-authoring/01-code-review-and-patch.xml
+# 下面的内容按原始思路保留，便于回看最初问题意识与表达方向。
+# 其中出现的 `<|quad_*|>`、脚本片段、tool syntax 等属于早期概念探索，
+# 不应被视为当前代码实现已经承诺的 authoring 或 canonical schema。
+
 # 角色observation建模需要LLM进一步处理的可感知的信息，实际由Agent-OS提供。与经典的user角色类似。
 # 角色belief建模Agent的内部信息。与经典的system角色类似。
 # 角色me建模LLM的输出，输出内容默认就是deliberation/thinking/reasoning，通常以工具调用结尾。与经典的assistant角色类似。
