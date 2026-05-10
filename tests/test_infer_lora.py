@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import study_sft.inference_runtime as inference_runtime
 from study_sft.agentic_context import AgenticContextEncoder, QWEN3_AGENTIC_TOKEN_TABLE
+from study_sft.inference_prompts import agentic_context_from_conversation, conversation_from_user_text
 from study_sft.inference_runtime import (
     STOP_REASON_EOS_TOKEN,
     STOP_REASON_MESSAGE_END,
@@ -16,7 +17,6 @@ from study_sft.inference_runtime import (
     parse_single_turn_generation,
     prepare_single_turn_generation,
 )
-from study_sft.samples import agentic_context_from_conversation, conversation_from_user_text
 
 from tests.test_training_data import FakeTokenizer
 

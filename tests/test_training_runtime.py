@@ -11,6 +11,7 @@ from datasets import Dataset
 import study_sft.training_cache as training_cache
 import study_sft.training_dataset as training_dataset
 from study_sft.agentic_context import AgenticContextEncoder, QWEN3_AGENTIC_TOKEN_TABLE
+from study_sft.loaders import load_dataset_source
 from study_sft.training_data import TrainingEncodingConfig
 from study_sft.training_dataset import (
     DatasetLocator,
@@ -36,14 +37,10 @@ class ShiftedTextTokenizer(FakeTokenizer):
 
 def make_encoding_config(
     *,
-    dataset_format: str = "alpaca",
-    default_belief_prompt: str = "You are a tester.",
     max_length: int = 128,
-    label_policy: str = "message",
+    label_policy: str = "entry",
 ) -> TrainingEncodingConfig:
     return TrainingEncodingConfig(
-        dataset_format=dataset_format,
-        default_belief_prompt=default_belief_prompt,
         max_length=max_length,
         label_policy=label_policy,
     )
@@ -77,13 +74,33 @@ def make_dataset_locator(
     )
 
 
+def make_acml_document(
+    *,
+    observation: str = "Explain SFT",
+    answer: str = "Answer one",
+    belief: str | None = None,
+) -> str:
+    belief_entry = ""
+    if belief is not None:
+        belief_entry = f'<acml:entry kind="belief">{belief}</acml:entry>'
+    return (
+        '<acml version="0">'
+        f"{belief_entry}"
+        f'<acml:entry kind="observation">{observation}</acml:entry>'
+        f'<acml:entry kind="me" loss="true">{answer}</acml:entry>'
+        "</acml>"
+    )
+
+
+def make_acml_dataset(*documents: str) -> Dataset:
+    return Dataset.from_dict({"acml": list(documents)})
+
+
 class TrainingRuntimeTests(unittest.TestCase):
     def test_encode_training_dataset_removes_source_columns(self) -> None:
-        dataset = Dataset.from_dict(
-            {
-                "instruction": ["Explain SFT", "Explain LoRA"],
-                "output": ["Answer one", "Answer two"],
-            }
+        dataset = make_acml_dataset(
+            make_acml_document(observation="Explain SFT", answer="Answer one"),
+            make_acml_document(observation="Explain LoRA", answer="Answer two"),
         )
 
         encoded = encode_training_dataset(
@@ -96,7 +113,7 @@ class TrainingRuntimeTests(unittest.TestCase):
         self.assertEqual(encoded.column_names, ["input_ids", "labels"])
 
     def test_prepare_training_dataset_allows_explicit_zero_limit(self) -> None:
-        dataset = Dataset.from_dict({"instruction": ["Explain SFT"], "output": ["Answer one"]})
+        dataset = make_acml_dataset(make_acml_document())
 
         encoded = prepare_training_dataset(
             dataset,
@@ -108,7 +125,7 @@ class TrainingRuntimeTests(unittest.TestCase):
         self.assertEqual(len(encoded), 0)
 
     def test_prepare_training_dataset_rejects_negative_limit(self) -> None:
-        dataset = Dataset.from_dict({"instruction": ["Explain SFT"], "output": ["Answer one"]})
+        dataset = make_acml_dataset(make_acml_document())
 
         with self.assertRaisesRegex(ValueError, "must be non-negative"):
             prepare_training_dataset(
@@ -118,24 +135,16 @@ class TrainingRuntimeTests(unittest.TestCase):
                 build_options=make_build_options(limit_train_samples=-1),
             )
 
-    def test_prepare_training_dataset_applies_limit_after_expansion(self) -> None:
-        dataset = Dataset.from_dict(
-            {
-                "messages": [
-                    [
-                        {"role": "user", "content": "Question 1"},
-                        {"role": "assistant", "content": "Answer 1"},
-                        {"role": "user", "content": "Question 2"},
-                        {"role": "assistant", "content": "Answer 2"},
-                    ]
-                ]
-            }
+    def test_prepare_training_dataset_applies_limit_to_acml_rows(self) -> None:
+        dataset = make_acml_dataset(
+            make_acml_document(observation="Question 1", answer="Answer 1"),
+            make_acml_document(observation="Question 2", answer="Answer 2"),
         )
 
         encoded = prepare_training_dataset(
             dataset,
             encoder=AgenticContextEncoder(FakeTokenizer()),
-            encoding_config=make_encoding_config(dataset_format="messages"),
+            encoding_config=make_encoding_config(),
             build_options=make_build_options(
                 limit_train_samples=1,
                 cache_dir=Path(tempfile.mkdtemp()),
@@ -145,7 +154,7 @@ class TrainingRuntimeTests(unittest.TestCase):
         self.assertEqual(len(encoded), 1)
 
     def test_prepare_training_dataset_reuses_cached_encoded_dataset(self) -> None:
-        dataset = Dataset.from_dict({"instruction": ["Explain SFT"], "output": ["Answer one"]})
+        dataset = make_acml_dataset(make_acml_document())
         encoder = AgenticContextEncoder(FakeTokenizer())
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -173,7 +182,7 @@ class TrainingRuntimeTests(unittest.TestCase):
         self.assertEqual(first[0]["input_ids"], second[0]["input_ids"])
 
     def test_prepare_training_dataset_validates_uncertified_cache_on_hit(self) -> None:
-        dataset = Dataset.from_dict({"instruction": ["Explain SFT"], "output": ["Answer one"]})
+        dataset = make_acml_dataset(make_acml_document())
         encoder = AgenticContextEncoder(FakeTokenizer())
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -231,7 +240,7 @@ class TrainingRuntimeTests(unittest.TestCase):
             validate_cached_training_dataset(cached_dataset, AgenticContextEncoder(FakeTokenizer()))
 
     def test_prepare_training_dataset_rebuilds_cache_when_tokenizer_identity_changes(self) -> None:
-        dataset = Dataset.from_dict({"instruction": ["Explain SFT"], "output": ["Answer one"]})
+        dataset = make_acml_dataset(make_acml_document())
 
         with tempfile.TemporaryDirectory() as temp_dir:
             cache_dir = Path(temp_dir)
@@ -257,14 +266,14 @@ class TrainingRuntimeTests(unittest.TestCase):
         self.assertEqual(len(updated_cache_dir_entries), 2)
 
     def test_cache_key_changes_when_label_policy_changes(self) -> None:
-        dataset = Dataset.from_dict({"instruction": ["Explain SFT"], "output": ["Answer one"]})
+        dataset = make_acml_dataset(make_acml_document())
         encoder = AgenticContextEncoder(FakeTokenizer())
 
-        message_key = training_dataset_cache_key(
+        entry_key = training_dataset_cache_key(
             build_training_dataset_cache_identity(
                 dataset,
                 encoder=encoder,
-                encoding_config=make_encoding_config(label_policy="message"),
+                encoding_config=make_encoding_config(label_policy="entry"),
                 dataset_locator=make_dataset_locator(dataset_name="unit-test"),
             )
         )
@@ -277,10 +286,22 @@ class TrainingRuntimeTests(unittest.TestCase):
             )
         )
 
-        self.assertNotEqual(message_key, payload_key)
+        self.assertNotEqual(entry_key, payload_key)
+
+    def test_build_training_dataset_cache_identity_records_acml_protocol(self) -> None:
+        cache_identity = build_training_dataset_cache_identity(
+            make_acml_dataset(make_acml_document()),
+            encoder=AgenticContextEncoder(FakeTokenizer()),
+            encoding_config=make_encoding_config(),
+            dataset_locator=make_dataset_locator(dataset_name="unit-test"),
+        )
+
+        self.assertEqual(cache_identity["data_protocol"], "acml")
+        self.assertNotIn("dataset_format", cache_identity)
+        self.assertNotIn("belief_prompt", cache_identity)
 
     def test_prepare_training_dataset_ignores_incomplete_cache_dir(self) -> None:
-        dataset = Dataset.from_dict({"instruction": ["Explain SFT"], "output": ["Answer one"]})
+        dataset = make_acml_dataset(make_acml_document())
         encoder = AgenticContextEncoder(FakeTokenizer())
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -310,7 +331,7 @@ class TrainingRuntimeTests(unittest.TestCase):
         self.assertEqual(encode_mock.call_count, 1)
 
     def test_prepare_training_dataset_recovers_after_partial_cache_write_failure(self) -> None:
-        dataset = Dataset.from_dict({"instruction": ["Explain SFT"], "output": ["Answer one"]})
+        dataset = make_acml_dataset(make_acml_document())
         encoder = AgenticContextEncoder(FakeTokenizer())
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -330,6 +351,14 @@ class TrainingRuntimeTests(unittest.TestCase):
 
             self.assertEqual([path.name for path in cache_dir.iterdir()], [])
 
+    def test_prepare_training_dataset_rejects_dataset_without_acml_column(self) -> None:
+        with self.assertRaisesRegex(ValueError, "expects a dataset with an 'acml' column"):
+            prepare_training_dataset(
+                Dataset.from_dict({"text": ["not acml"]}),
+                encoder=AgenticContextEncoder(FakeTokenizer()),
+                encoding_config=make_encoding_config(),
+            )
+
     def test_agentic_data_collator_pads_features_consistently(self) -> None:
         collator = AgenticDataCollator(pad_token_id=QWEN3_AGENTIC_TOKEN_TABLE.message_end)
         batch = collator(
@@ -342,6 +371,21 @@ class TrainingRuntimeTests(unittest.TestCase):
         self.assertEqual(batch["input_ids"].tolist(), [[1, 2], [3, QWEN3_AGENTIC_TOKEN_TABLE.message_end]])
         self.assertEqual(batch["attention_mask"].tolist(), [[1, 1], [1, 0]])
         self.assertEqual(batch["labels"].tolist(), [[-100, 2], [3, -100]])
+
+    def test_load_dataset_source_supports_single_acml_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "sample.acml"
+            path.write_text(
+                '<acml version="0"><acml:entry kind="observation">x</acml:entry></acml>',
+                encoding="utf-8",
+            )
+            dataset = load_dataset_source(dataset_path=str(path))
+
+        self.assertEqual(dataset.column_names, ["acml"])
+        self.assertEqual(
+            dataset[0]["acml"],
+            '<acml version="0"><acml:entry kind="observation">x</acml:entry></acml>',
+        )
 
 
 if __name__ == "__main__":

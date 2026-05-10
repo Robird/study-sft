@@ -51,6 +51,8 @@ def load_dataset_source(
         if logger is not None:
             logger.info("从本地路径加载数据集: %s", path)
         if path.is_file():
+            if path.suffix == ".acml":
+                return Dataset.from_dict({"acml": [path.read_text(encoding="utf-8")]})
             return load_dataset("json", data_files=str(path), split=dataset_split)
         loaded = load_from_disk(str(path))
         if isinstance(loaded, DatasetDict):

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import argparse
 
+from study_sft.inference_prompts import DEFAULT_BELIEF_PROMPT
 from study_sft.loaders import DEFAULT_MODEL_NAME_OR_PATH
-from study_sft.samples import DATASET_FORMAT_CHOICES, DEFAULT_BELIEF_PROMPT
 
 
 def str2bool(value: str | bool) -> bool:
@@ -49,10 +49,6 @@ def add_dataset_source_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dataset_config")
     parser.add_argument("--dataset_path")
     parser.add_argument("--dataset_split", default="train")
-
-
-def add_dataset_format_arg(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--dataset_format", choices=DATASET_FORMAT_CHOICES, default="alpaca")
 
 
 def add_belief_prompt_arg(parser: argparse.ArgumentParser) -> None:

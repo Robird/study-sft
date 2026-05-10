@@ -1,4 +1,4 @@
-"""LoRA/QLoRA training script for agentic-context SFT."""
+"""LoRA/QLoRA training script for ACML-based agentic-context SFT."""
 
 from __future__ import annotations
 
@@ -15,8 +15,6 @@ from datasets import Dataset
 from transformers import Trainer, TrainingArguments, set_seed
 
 from study_sft.cli_args import (
-    add_belief_prompt_arg,
-    add_dataset_format_arg,
     add_dataset_source_args,
     add_model_source_args,
     add_optional_bool_arg,
@@ -29,7 +27,6 @@ from study_sft.loaders import (
     load_base_tokenizer,
     load_dataset_source,
 )
-from study_sft.samples import DEFAULT_BELIEF_PROMPT, DatasetFormat
 from study_sft.training_data import TrainingEncodingConfig, TrainingLabelPolicy
 from study_sft.training_dataset import (
     DatasetLocator,
@@ -65,10 +62,8 @@ class ScriptArguments:
     dataset_config: Optional[str] = None
     dataset_path: Optional[str] = None
     dataset_split: str = "train"
-    dataset_format: DatasetFormat = "alpaca"
-    belief_prompt: str = DEFAULT_BELIEF_PROMPT
     limit_train_samples: Optional[int] = None
-    label_policy: TrainingLabelPolicy = "message"
+    label_policy: TrainingLabelPolicy = "entry"
 
     output_dir: str = "/mnt/fast/LLM/study-sft/qwen3-1.7b-agentic-lora"
     overwrite_output_dir: bool = False
@@ -111,10 +106,8 @@ def parse_args() -> ScriptArguments:
     parser = argparse.ArgumentParser(description=__doc__)
     add_model_source_args(parser, default_model_name=defaults.model_name_or_path)
     add_dataset_source_args(parser)
-    add_dataset_format_arg(parser)
-    add_belief_prompt_arg(parser)
     parser.add_argument("--limit_train_samples", type=int)
-    parser.add_argument("--label_policy", choices=["message", "payload_only"], default=defaults.label_policy)
+    parser.add_argument("--label_policy", choices=["entry", "payload_only"], default=defaults.label_policy)
 
     parser.add_argument("--output_dir", default=defaults.output_dir)
     parser.add_argument("--overwrite_output_dir", action="store_true")
@@ -314,8 +307,6 @@ def build_train_dataset(
         raw_dataset,
         encoder=encoder,
         encoding_config=TrainingEncodingConfig(
-            dataset_format=args.dataset_format,
-            default_belief_prompt=args.belief_prompt,
             max_length=args.max_length,
             label_policy=args.label_policy,
         ),

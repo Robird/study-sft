@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from study_sft.agentic_context import AgenticContextEncoder
+from study_sft.inference_prompts import agentic_context_from_conversation, conversation_from_user_text
 from study_sft.loaders import get_effective_pad_token_id, load_base_tokenizer
-from study_sft.samples import agentic_context_from_conversation, conversation_from_user_text
 
 if TYPE_CHECKING:
     from peft import PeftModel
@@ -145,12 +145,12 @@ def prepare_single_turn_generation(
     tokenizer,
     *,
     belief_prompt: str,
-    next_role: str = "me",
+    next_kind: str = "me",
 ) -> GenerationInputs:
     context = agentic_context_from_conversation(
         conversation_from_user_text(user_text, belief_prompt=belief_prompt)
     )
-    prefix_ids = encoder.encode_generation_payload_prefix(context, next_role=next_role)
+    prefix_ids = encoder.encode_generation_payload_prefix(context, next_kind=next_kind)
     stop_token_ids = [
         token_id
         for token_id in (getattr(tokenizer, "eos_token_id", None), encoder.policy.token_table.message_end)
@@ -205,7 +205,7 @@ def generate_single_turn_result(
     max_new_tokens: int,
     temperature: float,
     top_p: float,
-    next_role: str = "me",
+    next_kind: str = "me",
 ) -> SingleTurnGenerationResult:
     import torch
 
@@ -214,7 +214,7 @@ def generate_single_turn_result(
         encoder,
         tokenizer,
         belief_prompt=belief_prompt,
-        next_role=next_role,
+        next_kind=next_kind,
     )
     device = next(model.parameters()).device
     input_ids = torch.tensor([generation_inputs.prefix_ids], dtype=torch.long, device=device)
@@ -252,7 +252,7 @@ def generate_single_turn_text(
     max_new_tokens: int,
     temperature: float,
     top_p: float,
-    next_role: str = "me",
+    next_kind: str = "me",
 ) -> str:
     return generate_single_turn_result(
         user_text,
@@ -263,5 +263,5 @@ def generate_single_turn_text(
         max_new_tokens=max_new_tokens,
         temperature=temperature,
         top_p=top_p,
-        next_role=next_role,
+        next_kind=next_kind,
     ).display_text

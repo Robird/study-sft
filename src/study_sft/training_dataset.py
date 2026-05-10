@@ -1,4 +1,4 @@
-"""Dataset-level builders for pretokenized agentic SFT."""
+"""Dataset-level builders for pretokenized ACML SFT."""
 
 from __future__ import annotations
 
@@ -12,10 +12,11 @@ from datasets import Dataset
 
 from study_sft.agentic_context import ENCODING_VERSION, AgenticContextEncoder, EncodedContext
 from study_sft.training_cache import TrainingDatasetCacheStore
-from study_sft.training_data import TrainingEncodingConfig, iter_training_features_from_record
+from study_sft.training_data import TrainingEncodingConfig, encode_training_features_from_record
 
 
-TRAINING_DATASET_CACHE_VERSION = "agentic-training-dataset-v4"
+TRAINING_DATASET_CACHE_VERSION = "agentic-training-dataset-v5"
+ACML_DATA_PROTOCOL = "acml"
 
 
 @dataclass(frozen=True)
@@ -41,7 +42,7 @@ def tokenizer_identity_payload(encoder: AgenticContextEncoder) -> dict[str, obje
         token_table.message_end_text,
         token_table.opaque_payload_start_text,
         token_table.opaque_payload_end_text,
-        *[f"{role}\n" for role in encoder.policy.allowed_roles],
+        *[f"{kind}\n" for kind in encoder.policy.allowed_kinds],
         "\n",
         "agentic-cache-probe",
         "agentic-cache-probe <payload>",
@@ -58,6 +59,11 @@ def tokenizer_identity_payload(encoder: AgenticContextEncoder) -> dict[str, obje
     }
 
 
+def _require_acml_column(dataset: Dataset) -> None:
+    if "acml" not in dataset.column_names:
+        raise ValueError("training_dataset expects a dataset with an 'acml' column")
+
+
 def build_training_dataset_cache_identity(
     dataset: Dataset,
     *,
@@ -65,11 +71,13 @@ def build_training_dataset_cache_identity(
     encoding_config: TrainingEncodingConfig,
     dataset_locator: DatasetLocator | None = None,
 ) -> dict[str, object]:
+    _require_acml_column(dataset)
     locator = dataset_locator or DatasetLocator()
     token_table = encoder.policy.token_table
     return {
         "cache_version": TRAINING_DATASET_CACHE_VERSION,
         "encoding_version": ENCODING_VERSION,
+        "data_protocol": ACML_DATA_PROTOCOL,
         "dataset_fingerprint": getattr(dataset, "_fingerprint", None),
         "dataset_locator": {
             "dataset_path": str(Path(locator.dataset_path).resolve()) if locator.dataset_path else None,
@@ -77,13 +85,11 @@ def build_training_dataset_cache_identity(
             "dataset_config": locator.dataset_config,
             "dataset_split": locator.dataset_split,
         },
-        "dataset_format": encoding_config.dataset_format,
-        "belief_prompt": encoding_config.default_belief_prompt,
         "max_length": encoding_config.max_length,
         "label_policy": encoding_config.label_policy,
         "tokenizer": tokenizer_identity_payload(encoder),
         "policy": {
-            "allowed_roles": list(encoder.policy.allowed_roles),
+            "allowed_kinds": list(encoder.policy.allowed_kinds),
             "extra_reserved_ids": list(encoder.policy.extra_reserved_ids),
             "token_table": {
                 "message_start": token_table.message_start,
@@ -122,23 +128,6 @@ def validate_cached_training_dataset(dataset: Dataset, encoder: AgenticContextEn
         encoder.validate(EncodedContext(input_ids=input_ids, loss_mask=[0] * len(input_ids)))
 
 
-def _iter_encoded_rows_from_records(
-    records,
-    *,
-    encoder: AgenticContextEncoder,
-    encoding_config: TrainingEncodingConfig,
-    validate_encoding: bool,
-):
-    for record in records:
-        for features in iter_training_features_from_record(
-            dict(record),
-            encoder=encoder,
-            config=encoding_config,
-            validate_encoding=validate_encoding,
-        ):
-            yield features
-
-
 def _feature_columns_from_encoded_rows(
     encoded_rows: list[dict[str, list[int]]],
 ) -> dict[str, list[list[int]]]:
@@ -155,6 +144,8 @@ def encode_training_dataset(
     encoding_config: TrainingEncodingConfig,
     validate_encoding: bool = False,
 ) -> Dataset:
+    _require_acml_column(dataset)
+
     def add_features(batch: dict[str, list[object]]) -> dict[str, list[list[int]]]:
         batch_size = len(next(iter(batch.values()), []))
         records = [
@@ -164,21 +155,22 @@ def encode_training_dataset(
             }
             for index in range(batch_size)
         ]
-        encoded_rows = list(
-            _iter_encoded_rows_from_records(
-                records,
+        encoded_rows = [
+            encode_training_features_from_record(
+                dict(record),
                 encoder=encoder,
-                encoding_config=encoding_config,
+                config=encoding_config,
                 validate_encoding=validate_encoding,
             )
-        )
+            for record in records
+        ]
         return _feature_columns_from_encoded_rows(encoded_rows)
 
     return dataset.map(
         add_features,
         batched=True,
         remove_columns=list(dataset.column_names),
-        desc="encode agentic-context training samples",
+        desc="encode acml training samples",
     )
 
 
@@ -190,16 +182,18 @@ def _encode_training_dataset_limited(
     validate_encoding: bool,
     limit_train_samples: int,
 ) -> Dataset:
+    _require_acml_column(dataset)
     _validate_limit_train_samples(limit_train_samples)
     if limit_train_samples == 0:
         return _empty_encoded_dataset()
     encoded_rows: list[dict[str, list[int]]] = []
-    for features in _iter_encoded_rows_from_records(
-        dataset,
-        encoder=encoder,
-        encoding_config=encoding_config,
-        validate_encoding=validate_encoding,
-    ):
+    for record in dataset:
+        features = encode_training_features_from_record(
+            dict(record),
+            encoder=encoder,
+            config=encoding_config,
+            validate_encoding=validate_encoding,
+        )
         encoded_rows.append(features)
         if len(encoded_rows) >= limit_train_samples:
             break
@@ -215,6 +209,7 @@ def prepare_training_dataset(
     dataset_locator: DatasetLocator | None = None,
     logger: logging.Logger | None = None,
 ) -> Dataset:
+    _require_acml_column(dataset)
     options = build_options or TrainingDatasetBuildOptions()
     locator = dataset_locator or DatasetLocator()
     validate_encoding = options.validate_encoding

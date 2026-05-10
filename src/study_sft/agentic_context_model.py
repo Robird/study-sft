@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 
-AgenticRole = Literal["belief", "observation", "me"]
+AgenticKind = Literal["belief", "observation", "me"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,48 +25,48 @@ class AgenticOpaquePayload:
 
 
 @dataclass(frozen=True, slots=True)
-class AgenticMessage:
-    role: AgenticRole
+class AgenticEntry:
+    kind: AgenticKind
     content: tuple[AgenticOpaquePayload, ...]
     loss: bool = False
 
     def __post_init__(self) -> None:
-        if not isinstance(self.role, str):
-            raise ValueError("AgenticMessage.role must be a string")
+        if not isinstance(self.kind, str):
+            raise ValueError("AgenticEntry.kind must be a string")
         if not isinstance(self.loss, bool):
-            raise ValueError("AgenticMessage.loss must be a boolean")
+            raise ValueError("AgenticEntry.loss must be a boolean")
         if not isinstance(self.content, (tuple, list)):
-            raise ValueError("AgenticMessage.content must be a sequence")
+            raise ValueError("AgenticEntry.content must be a sequence")
         content = tuple(self.content)
         for item in content:
             if not isinstance(item, AgenticOpaquePayload):
-                raise ValueError("AgenticMessage.content items must be AgenticOpaquePayload values")
+                raise ValueError("AgenticEntry.content items must be AgenticOpaquePayload values")
         object.__setattr__(self, "content", content)
 
     def to_dict(self) -> dict[str, Any]:
-        message = {
-            "role": self.role,
+        entry = {
+            "kind": self.kind,
             "content": [item.to_dict() for item in self.content],
         }
         if self.loss:
-            message["loss"] = True
-        return message
+            entry["loss"] = True
+        return entry
 
 
 @dataclass(frozen=True, slots=True)
 class AgenticContext:
-    messages: tuple[AgenticMessage, ...]
+    entries: tuple[AgenticEntry, ...]
 
     def __post_init__(self) -> None:
-        if not isinstance(self.messages, (tuple, list)):
-            raise ValueError("AgenticContext.messages must be a sequence")
-        messages = tuple(self.messages)
-        for message in messages:
-            if not isinstance(message, AgenticMessage):
-                raise ValueError("AgenticContext.messages must contain AgenticMessage values")
-        object.__setattr__(self, "messages", messages)
+        if not isinstance(self.entries, (tuple, list)):
+            raise ValueError("AgenticContext.entries must be a sequence")
+        entries = tuple(self.entries)
+        for entry in entries:
+            if not isinstance(entry, AgenticEntry):
+                raise ValueError("AgenticContext.entries must contain AgenticEntry values")
+        object.__setattr__(self, "entries", entries)
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "messages": [message.to_dict() for message in self.messages],
+            "entries": [entry.to_dict() for entry in self.entries],
         }

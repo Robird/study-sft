@@ -69,7 +69,7 @@ def run_interactive(
     initial_prompt: str | None = None,
 ) -> None:
     print(
-        f"进入交互式单轮推理：role=me, temperature={args.temperature}, top_p={args.top_p}"
+        f"进入交互式单轮推理：kind=me, temperature={args.temperature}, top_p={args.top_p}"
     )
     print("每次输入都会独立推理，不保留历史。输入 exit、quit 或 :q 退出。")
 

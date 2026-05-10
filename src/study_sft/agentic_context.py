@@ -2,9 +2,9 @@
 
 The v0 protocol intentionally stays small:
 
-- messages carry a role, optional message-level loss, and a sequence of opaque payload items
+- entries carry a kind, optional entry-level loss, and a sequence of opaque payload items
 - payload items are the only content leaf in the core schema
-- generation opens a new message and optionally the first payload slot explicitly
+- generation opens a new entry and optionally the first payload slot explicitly
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
 
-from study_sft.agentic_context_model import AgenticContext, AgenticMessage
+from study_sft.agentic_context_model import AgenticContext, AgenticEntry
 
 
 __all__ = [
@@ -24,7 +24,7 @@ __all__ = [
     "EncodedContext",
     "EncodedContextArtifacts",
     "EncodedText",
-    "MessageSpan",
+    "EntrySpan",
     "OpaquePayloadSpan",
     "QWEN3_AGENTIC_TOKEN_TABLE",
     "Span",
@@ -39,7 +39,7 @@ STRUCTURE_OPAQUE_PAYLOAD_START = "opaque_payload_start"
 STRUCTURE_OPAQUE_PAYLOAD_END = "opaque_payload_end"
 
 SPAN_KIND_STRUCTURE = "structure"
-SPAN_KIND_ROLE = "role"
+SPAN_KIND_KIND = "kind"
 SPAN_KIND_NEWLINE = "newline"
 SPAN_KIND_OPAQUE_PAYLOAD = "opaque_payload"
 
@@ -102,11 +102,11 @@ QWEN3_AGENTIC_TOKEN_TABLE = AgenticTokenTable()
 @dataclass(frozen=True, slots=True)
 class AgenticContextPolicy:
     token_table: AgenticTokenTable = QWEN3_AGENTIC_TOKEN_TABLE
-    allowed_roles: tuple[str, ...] = ("belief", "observation", "me")
+    allowed_kinds: tuple[str, ...] = ("belief", "observation", "me")
     extra_reserved_ids: tuple[int, ...] = ()
 
     _reserved_ids: frozenset[int] = field(init=False, repr=False, compare=False)
-    _allowed_roles: frozenset[str] = field(init=False, repr=False, compare=False)
+    _allowed_kinds: frozenset[str] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -114,7 +114,7 @@ class AgenticContextPolicy:
             "_reserved_ids",
             frozenset((*self.token_table.reserved_ids(), *self.extra_reserved_ids)),
         )
-        object.__setattr__(self, "_allowed_roles", frozenset(self.allowed_roles))
+        object.__setattr__(self, "_allowed_kinds", frozenset(self.allowed_kinds))
 
     def reserved_ids(self) -> frozenset[int]:
         return self._reserved_ids
@@ -134,15 +134,15 @@ class EncodedText:
 class Span:
     start: int
     end: int
-    role: str
+    entry_kind: str
     kind: str
 
 
 @dataclass(frozen=True, slots=True)
-class MessageSpan:
+class EntrySpan:
     start: int
     end: int
-    role: str
+    kind: str
     loss: bool
 
 
@@ -150,7 +150,7 @@ class MessageSpan:
 class OpaquePayloadSpan:
     start: int
     end: int
-    role: str
+    entry_kind: str
     loss: bool
 
 
@@ -172,14 +172,14 @@ class EncodedContext:
 class DebugEncodedContext:
     encoded: EncodedContext
     spans: tuple[Span, ...]
-    message_spans: tuple[MessageSpan, ...] = ()
+    entry_spans: tuple[EntrySpan, ...] = ()
     opaque_payload_spans: tuple[OpaquePayloadSpan, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "encoded": self.encoded.to_dict(),
             "spans": [asdict(span) for span in self.spans],
-            "message_spans": [asdict(span) for span in self.message_spans],
+            "entry_spans": [asdict(span) for span in self.entry_spans],
             "opaque_payload_spans": [asdict(span) for span in self.opaque_payload_spans],
         }
 
@@ -187,35 +187,35 @@ class DebugEncodedContext:
 @dataclass(frozen=True, slots=True)
 class EncodedContextArtifacts:
     encoded: EncodedContext
-    message_spans: tuple[MessageSpan, ...] = ()
+    entry_spans: tuple[EntrySpan, ...] = ()
     opaque_payload_spans: tuple[OpaquePayloadSpan, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "encoded": self.encoded.to_dict(),
-            "message_spans": [asdict(span) for span in self.message_spans],
+            "entry_spans": [asdict(span) for span in self.entry_spans],
             "opaque_payload_spans": [asdict(span) for span in self.opaque_payload_spans],
         }
 
 
 @dataclass(frozen=True, slots=True)
-class _NormalizedMessage:
-    role: str
+class _NormalizedEntry:
+    kind: str
     loss: bool
     content: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class _NormalizedContext:
-    messages: tuple[_NormalizedMessage, ...]
+    entries: tuple[_NormalizedEntry, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class _ContextLayout:
     structure_ids: dict[str, int]
     id_to_structure_name: dict[int, str]
-    role_prefix_ids: dict[str, list[int]]
-    ordered_role_prefixes: tuple[tuple[str, list[int]], ...]
+    kind_prefix_ids: dict[str, list[int]]
+    ordered_kind_prefixes: tuple[tuple[str, list[int]], ...]
     newline_ids: list[int]
 
 
@@ -263,30 +263,30 @@ def _normalize_context(
 ) -> _NormalizedContext:
     if not isinstance(context, AgenticContext):
         raise ValueError("context must be an AgenticContext; parse external dicts with agentic_context_schema first")
-    return _NormalizedContext(messages=tuple(_normalize_typed_message(message, policy) for message in context.messages))
+    return _NormalizedContext(entries=tuple(_normalize_typed_entry(entry, policy) for entry in context.entries))
 
 
-def _normalize_typed_message(
-    message: AgenticMessage,
+def _normalize_typed_entry(
+    entry: AgenticEntry,
     policy: AgenticContextPolicy,
-) -> _NormalizedMessage:
-    role = _validate_role(message.role, policy)
-    return _NormalizedMessage(
-        role=role,
-        loss=message.loss,
-        content=tuple(item.text for item in message.content),
+) -> _NormalizedEntry:
+    kind = _validate_kind(entry.kind, policy)
+    return _NormalizedEntry(
+        kind=kind,
+        loss=entry.loss,
+        content=tuple(item.text for item in entry.content),
     )
 
 
-def _validate_role(role_value: Any, policy: AgenticContextPolicy) -> str:
-    if not isinstance(role_value, str):
-        raise ValueError("message.role must be a string")
-    role = role_value.strip()
-    if not role:
-        raise ValueError("message.role must not be empty")
-    if role not in policy._allowed_roles:
-        raise ValueError(f"unsupported role: {role!r}")
-    return role
+def _validate_kind(kind_value: Any, policy: AgenticContextPolicy) -> str:
+    if not isinstance(kind_value, str):
+        raise ValueError("entry.kind must be a string")
+    kind = kind_value.strip()
+    if not kind:
+        raise ValueError("entry.kind must not be empty")
+    if kind not in policy._allowed_kinds:
+        raise ValueError(f"unsupported kind: {kind!r}")
+    return kind
 
 
 class AgenticContextEncoder:
@@ -319,7 +319,7 @@ class AgenticContextEncoder:
         encoded = self._encode_artifacts(
             normalized,
             collect_debug=False,
-            collect_message_spans=False,
+            collect_entry_spans=False,
             collect_payload_spans=False,
         ).encoded()
         if validate:
@@ -337,7 +337,7 @@ class AgenticContextEncoder:
         artifacts = self._encode_artifacts(
             normalized,
             collect_debug=False,
-            collect_message_spans=True,
+            collect_entry_spans=True,
             collect_payload_spans=include_opaque_payload_spans,
         ).artifacts()
         if validate:
@@ -354,7 +354,7 @@ class AgenticContextEncoder:
         debug_encoded = self._encode_artifacts(
             normalized,
             collect_debug=True,
-            collect_message_spans=True,
+            collect_entry_spans=True,
             collect_payload_spans=True,
         ).debug_encoded()
         if validate:
@@ -365,11 +365,11 @@ class AgenticContextEncoder:
         self,
         context: AgenticContext,
         *,
-        next_role: str = "me",
+        next_kind: str = "me",
     ) -> list[int]:
         layout = self._layout_or_build()
         return [
-            *self._encode_generation_message_prefix(context, next_role=next_role),
+            *self._encode_generation_entry_prefix(context, next_kind=next_kind),
             layout.structure_ids[STRUCTURE_OPAQUE_PAYLOAD_START],
         ]
 
@@ -382,72 +382,72 @@ class AgenticContextEncoder:
         debug_spans = _validate_debug_context_spans(debug_encoded, self.policy, layout)
         if debug_spans != encoded_spans:
             raise ValueError("debug spans do not match the encoded token trace")
-        if debug_encoded.message_spans:
-            encoded_messages = _walk_encoded_messages(debug_encoded.encoded, self.policy, layout)
-            if debug_encoded.message_spans != encoded_messages:
-                raise ValueError("debug message_spans do not match the encoded token trace")
+        if debug_encoded.entry_spans:
+            encoded_entries = _walk_encoded_entries(debug_encoded.encoded, self.policy, layout)
+            if debug_encoded.entry_spans != encoded_entries:
+                raise ValueError("debug entry_spans do not match the encoded token trace")
         if debug_encoded.opaque_payload_spans:
             encoded_artifacts = _walk_encoded_artifacts(debug_encoded.encoded, self.policy, layout)
             if debug_encoded.opaque_payload_spans != encoded_artifacts.opaque_payload_spans:
                 raise ValueError("debug opaque_payload_spans do not match the encoded token trace")
 
-    def describe_messages(self, encoded: EncodedContext) -> tuple[MessageSpan, ...]:
-        return _walk_encoded_messages(encoded, self.policy, self._layout_or_build())
+    def describe_entries(self, encoded: EncodedContext) -> tuple[EntrySpan, ...]:
+        return _walk_encoded_entries(encoded, self.policy, self._layout_or_build())
 
     def _encode_artifacts(
         self,
         normalized: _NormalizedContext,
         *,
         collect_debug: bool,
-        collect_message_spans: bool,
+        collect_entry_spans: bool,
         collect_payload_spans: bool,
     ) -> _ContextBuilder:
         builder = _ContextBuilder(
             self,
             collect_debug=collect_debug,
-            collect_message_spans=collect_message_spans,
+            collect_entry_spans=collect_entry_spans,
             collect_payload_spans=collect_payload_spans,
         )
-        for message in normalized.messages:
-            builder.serialize_message(message)
+        for entry in normalized.entries:
+            builder.serialize_entry(entry)
         return builder
 
-    def _encode_generation_message_prefix(
+    def _encode_generation_entry_prefix(
         self,
         context: AgenticContext,
         *,
-        next_role: str,
+        next_kind: str,
     ) -> list[int]:
         normalized = _normalize_context(context, self.policy)
         encoded = self._encode_artifacts(
             normalized,
             collect_debug=False,
-            collect_message_spans=False,
+            collect_entry_spans=False,
             collect_payload_spans=False,
         ).encoded()
-        role = _validate_role(next_role, self.policy)
+        kind = _validate_kind(next_kind, self.policy)
         layout = self._layout_or_build()
         return [
             *encoded.input_ids,
             layout.structure_ids[STRUCTURE_MESSAGE_START],
-            *layout.role_prefix_ids[role],
+            *layout.kind_prefix_ids[kind],
         ]
 
     def _layout_or_build(self) -> _ContextLayout:
         if self._layout is None:
             structure_ids = self.policy.token_table.id_by_name()
-            role_prefix_ids = {
-                role: self._encode_checked_inline(f"{role}\n", kind=SPAN_KIND_ROLE)
-                for role in self.policy.allowed_roles
+            kind_prefix_ids = {
+                kind: self._encode_checked_inline(f"{kind}\n", kind=SPAN_KIND_KIND)
+                for kind in self.policy.allowed_kinds
             }
             newline_ids = self._encode_checked_inline("\n", kind=SPAN_KIND_NEWLINE)
             self._layout = _ContextLayout(
                 structure_ids=structure_ids,
                 id_to_structure_name={token_id: name for name, token_id in structure_ids.items()},
-                role_prefix_ids=role_prefix_ids,
-                ordered_role_prefixes=tuple(
+                kind_prefix_ids=kind_prefix_ids,
+                ordered_kind_prefixes=tuple(
                     sorted(
-                        ((role, list(ids)) for role, ids in role_prefix_ids.items()),
+                        ((kind, list(ids)) for kind, ids in kind_prefix_ids.items()),
                         key=lambda item: len(item[1]),
                         reverse=True,
                     )
@@ -469,59 +469,85 @@ class _ContextBuilder:
         encoder: AgenticContextEncoder,
         *,
         collect_debug: bool,
-        collect_message_spans: bool = False,
+        collect_entry_spans: bool = False,
         collect_payload_spans: bool = False,
     ) -> None:
         self.encoder = encoder
         self.layout = encoder._layout_or_build()
         self.collect_debug = collect_debug
-        self.collect_message_spans = collect_message_spans
+        self.collect_entry_spans = collect_entry_spans
         self.collect_payload_spans = collect_payload_spans
         self.input_ids: list[int] = []
         self.loss_mask: list[int] = []
         self.spans: list[Span] = []
-        self.message_spans: list[MessageSpan] = []
+        self.entry_spans: list[EntrySpan] = []
         self.opaque_payload_spans: list[OpaquePayloadSpan] = []
 
-    def serialize_message(self, message: _NormalizedMessage) -> None:
+    def serialize_entry(self, entry: _NormalizedEntry) -> None:
         start = len(self.input_ids)
-        self._append_structure(STRUCTURE_MESSAGE_START, role=message.role, loss=message.loss)
-        self._append_ids(self.layout.role_prefix_ids[message.role], role=message.role, loss=message.loss, kind=SPAN_KIND_ROLE)
-        for payload_text in message.content:
-            self._serialize_payload(payload_text, role=message.role, loss=message.loss)
-        self._append_structure(STRUCTURE_MESSAGE_END, role=message.role, loss=message.loss)
-        self._append_ids(self.layout.newline_ids, role=message.role, loss=message.loss, kind=SPAN_KIND_NEWLINE)
-        if self.collect_message_spans:
-            self.message_spans.append(MessageSpan(start=start, end=len(self.input_ids), role=message.role, loss=message.loss))
+        self._append_structure(STRUCTURE_MESSAGE_START, entry_kind=entry.kind, loss=entry.loss)
+        self._append_ids(
+            self.layout.kind_prefix_ids[entry.kind],
+            entry_kind=entry.kind,
+            loss=entry.loss,
+            span_kind=SPAN_KIND_KIND,
+        )
+        for payload_text in entry.content:
+            self._serialize_payload(payload_text, entry_kind=entry.kind, loss=entry.loss)
+        self._append_structure(STRUCTURE_MESSAGE_END, entry_kind=entry.kind, loss=entry.loss)
+        self._append_ids(
+            self.layout.newline_ids,
+            entry_kind=entry.kind,
+            loss=entry.loss,
+            span_kind=SPAN_KIND_NEWLINE,
+        )
+        if self.collect_entry_spans:
+            self.entry_spans.append(EntrySpan(start=start, end=len(self.input_ids), kind=entry.kind, loss=entry.loss))
 
-    def _serialize_payload(self, payload_text: str, *, role: str, loss: bool) -> None:
-        self._append_structure(STRUCTURE_OPAQUE_PAYLOAD_START, role=role, loss=loss)
+    def _serialize_payload(self, payload_text: str, *, entry_kind: str, loss: bool) -> None:
+        self._append_structure(STRUCTURE_OPAQUE_PAYLOAD_START, entry_kind=entry_kind, loss=loss)
         payload_start = len(self.input_ids)
         encoded = self.encoder.encode_payload(payload_text)
-        self._append_ids(encoded.input_ids, role=role, loss=loss, kind=SPAN_KIND_OPAQUE_PAYLOAD)
+        self._append_ids(
+            encoded.input_ids,
+            entry_kind=entry_kind,
+            loss=loss,
+            span_kind=SPAN_KIND_OPAQUE_PAYLOAD,
+        )
         payload_end = len(self.input_ids)
         if self.collect_payload_spans:
             self.opaque_payload_spans.append(
-                OpaquePayloadSpan(start=payload_start, end=payload_end, role=role, loss=loss)
+                OpaquePayloadSpan(start=payload_start, end=payload_end, entry_kind=entry_kind, loss=loss)
             )
-        self._append_structure(STRUCTURE_OPAQUE_PAYLOAD_END, role=role, loss=loss)
+        self._append_structure(STRUCTURE_OPAQUE_PAYLOAD_END, entry_kind=entry_kind, loss=loss)
 
-    def _append_structure(self, name: str, *, role: str, loss: bool) -> None:
+    def _append_structure(self, name: str, *, entry_kind: str, loss: bool) -> None:
         token_id = self.layout.structure_ids[name]
         start = len(self.input_ids)
         self.input_ids.append(token_id)
         self.loss_mask.append(1 if loss else 0)
         if self.collect_debug:
-            self.spans.append(Span(start=start, end=start + 1, role=role, kind=SPAN_KIND_STRUCTURE))
+            self.spans.append(
+                Span(start=start, end=start + 1, entry_kind=entry_kind, kind=SPAN_KIND_STRUCTURE)
+            )
 
-    def _append_ids(self, input_ids: list[int], *, role: str, loss: bool, kind: str) -> None:
+    def _append_ids(
+        self,
+        input_ids: list[int],
+        *,
+        entry_kind: str,
+        loss: bool,
+        span_kind: str,
+    ) -> None:
         if not input_ids:
             return
         start = len(self.input_ids)
         self.input_ids.extend(input_ids)
         self.loss_mask.extend([1 if loss else 0] * len(input_ids))
         if self.collect_debug:
-            self.spans.append(Span(start=start, end=len(self.input_ids), role=role, kind=kind))
+            self.spans.append(
+                Span(start=start, end=len(self.input_ids), entry_kind=entry_kind, kind=span_kind)
+            )
 
     def encoded(self) -> EncodedContext:
         return EncodedContext(input_ids=self.input_ids, loss_mask=self.loss_mask)
@@ -532,16 +558,16 @@ class _ContextBuilder:
         return DebugEncodedContext(
             encoded=self.encoded(),
             spans=tuple(self.spans),
-            message_spans=tuple(self.message_spans),
+            entry_spans=tuple(self.entry_spans),
             opaque_payload_spans=tuple(self.opaque_payload_spans),
         )
 
     def artifacts(self) -> EncodedContextArtifacts:
-        if not self.collect_message_spans:
-            raise RuntimeError("message span collection was not enabled")
+        if not self.collect_entry_spans:
+            raise RuntimeError("entry span collection was not enabled")
         return EncodedContextArtifacts(
             encoded=self.encoded(),
-            message_spans=tuple(self.message_spans),
+            entry_spans=tuple(self.entry_spans),
             opaque_payload_spans=tuple(self.opaque_payload_spans),
         )
 
@@ -563,81 +589,83 @@ def _walk_encoded_spans(
     while position < len(encoded.input_ids):
         if encoded.input_ids[position] != layout.structure_ids[STRUCTURE_MESSAGE_START]:
             raise ValueError(f"expected message_start at position {position}")
-        message_start = position
-        message_loss = encoded.loss_mask[position]
+        entry_start = position
+        entry_loss = encoded.loss_mask[position]
         position += 1
-        matched_role = None
-        for role, ids in layout.ordered_role_prefixes:
+        matched_kind = None
+        for kind, ids in layout.ordered_kind_prefixes:
             end = position + len(ids)
             if encoded.input_ids[position:end] == ids:
-                if any(mask != message_loss for mask in encoded.loss_mask[position:end]):
-                    raise ValueError("loss_mask must be constant within message role prefix")
-                matched_role = role
-                spans.append(Span(start=message_start, end=message_start + 1, role=role, kind=SPAN_KIND_STRUCTURE))
-                spans.append(Span(start=position, end=end, role=role, kind=SPAN_KIND_ROLE))
+                if any(mask != entry_loss for mask in encoded.loss_mask[position:end]):
+                    raise ValueError("loss_mask must be constant within entry kind prefix")
+                matched_kind = kind
+                spans.append(Span(start=entry_start, end=entry_start + 1, entry_kind=kind, kind=SPAN_KIND_STRUCTURE))
+                spans.append(Span(start=position, end=end, entry_kind=kind, kind=SPAN_KIND_KIND))
                 position = end
                 break
-        if matched_role is None:
-            raise ValueError(f"message_start at position {message_start} is not followed by a valid role prefix")
+        if matched_kind is None:
+            raise ValueError(f"message_start at position {entry_start} is not followed by a valid kind prefix")
 
         while True:
             if position >= len(encoded.input_ids):
-                raise ValueError("message is not closed before end of sequence")
+                raise ValueError("entry is not closed before end of sequence")
             token_id = encoded.input_ids[position]
-            if encoded.loss_mask[position] != message_loss:
-                raise ValueError("loss_mask must be constant within a message")
+            if encoded.loss_mask[position] != entry_loss:
+                raise ValueError("loss_mask must be constant within an entry")
             if token_id == layout.structure_ids[STRUCTURE_OPAQUE_PAYLOAD_START]:
-                spans.append(Span(start=position, end=position + 1, role=matched_role, kind=SPAN_KIND_STRUCTURE))
+                spans.append(Span(start=position, end=position + 1, entry_kind=matched_kind, kind=SPAN_KIND_STRUCTURE))
                 position += 1
                 payload_start = position
                 while position < len(encoded.input_ids) and encoded.input_ids[position] not in reserved_ids:
-                    if encoded.loss_mask[position] != message_loss:
-                        raise ValueError("loss_mask must be constant within a message")
+                    if encoded.loss_mask[position] != entry_loss:
+                        raise ValueError("loss_mask must be constant within an entry")
                     position += 1
                 if position >= len(encoded.input_ids):
                     raise ValueError("opaque_payload is not closed before end of sequence")
-                spans.append(Span(start=payload_start, end=position, role=matched_role, kind=SPAN_KIND_OPAQUE_PAYLOAD))
+                spans.append(
+                    Span(start=payload_start, end=position, entry_kind=matched_kind, kind=SPAN_KIND_OPAQUE_PAYLOAD)
+                )
                 if encoded.input_ids[position] != layout.structure_ids[STRUCTURE_OPAQUE_PAYLOAD_END]:
                     raise ValueError(f"opaque_payload contains an unexpected reserved token at position {position}")
-                spans.append(Span(start=position, end=position + 1, role=matched_role, kind=SPAN_KIND_STRUCTURE))
+                spans.append(Span(start=position, end=position + 1, entry_kind=matched_kind, kind=SPAN_KIND_STRUCTURE))
                 position += 1
                 continue
             if token_id == layout.structure_ids[STRUCTURE_MESSAGE_END]:
-                spans.append(Span(start=position, end=position + 1, role=matched_role, kind=SPAN_KIND_STRUCTURE))
+                spans.append(Span(start=position, end=position + 1, entry_kind=matched_kind, kind=SPAN_KIND_STRUCTURE))
                 position += 1
                 newline_end = position + len(layout.newline_ids)
                 if encoded.input_ids[position:newline_end] != layout.newline_ids:
                     raise ValueError(f"message_end at position {position - 1} is not followed by the trailing newline")
-                if any(mask != message_loss for mask in encoded.loss_mask[position:newline_end]):
-                    raise ValueError("loss_mask must be constant across the trailing message newline")
-                spans.append(Span(start=position, end=newline_end, role=matched_role, kind=SPAN_KIND_NEWLINE))
+                if any(mask != entry_loss for mask in encoded.loss_mask[position:newline_end]):
+                    raise ValueError("loss_mask must be constant across the trailing entry newline")
+                spans.append(Span(start=position, end=newline_end, entry_kind=matched_kind, kind=SPAN_KIND_NEWLINE))
                 position = newline_end
                 break
-            raise ValueError(f"message content must be opaque_payload blocks, found reserved token at position {position}")
+            raise ValueError(f"entry content must be opaque_payload blocks, found reserved token at position {position}")
     return tuple(spans)
 
 
-def _walk_encoded_messages(
+def _walk_encoded_entries(
     encoded: EncodedContext,
     policy: AgenticContextPolicy,
     layout: _ContextLayout,
-) -> tuple[MessageSpan, ...]:
+) -> tuple[EntrySpan, ...]:
     spans = _walk_encoded_spans(encoded, policy, layout)
     if not spans:
         return ()
-    messages: list[MessageSpan] = []
+    entries: list[EntrySpan] = []
     index = 0
     while index < len(spans):
         start_span = spans[index]
-        role = start_span.role
+        entry_kind = start_span.entry_kind
         loss = bool(encoded.loss_mask[start_span.start])
         while index < len(spans) and spans[index].kind != SPAN_KIND_NEWLINE:
             index += 1
         if index >= len(spans):
-            raise ValueError("message trace ended before trailing newline")
-        messages.append(MessageSpan(start=start_span.start, end=spans[index].end, role=role, loss=loss))
+            raise ValueError("entry trace ended before trailing newline")
+        entries.append(EntrySpan(start=start_span.start, end=spans[index].end, kind=entry_kind, loss=loss))
         index += 1
-    return tuple(messages)
+    return tuple(entries)
 
 
 def _walk_encoded_artifacts(
@@ -645,13 +673,13 @@ def _walk_encoded_artifacts(
     policy: AgenticContextPolicy,
     layout: _ContextLayout,
 ) -> EncodedContextArtifacts:
-    message_spans = _walk_encoded_messages(encoded, policy, layout)
+    entry_spans = _walk_encoded_entries(encoded, policy, layout)
     spans = _walk_encoded_spans(encoded, policy, layout)
     opaque_payload_spans = tuple(
         OpaquePayloadSpan(
             start=span.start,
             end=span.end,
-            role=span.role,
+            entry_kind=span.entry_kind,
             loss=bool(encoded.loss_mask[span.start]) if span.start < span.end else False,
         )
         for span in spans
@@ -659,7 +687,7 @@ def _walk_encoded_artifacts(
     )
     return EncodedContextArtifacts(
         encoded=encoded,
-        message_spans=message_spans,
+        entry_spans=entry_spans,
         opaque_payload_spans=opaque_payload_spans,
     )
 
@@ -672,9 +700,9 @@ def _validate_debug_context_spans(
     encoded = debug_encoded.encoded
     spans = debug_encoded.spans
     expected_start = 0
-    allowed_kinds = {
+    allowed_span_kinds = {
         SPAN_KIND_STRUCTURE,
-        SPAN_KIND_ROLE,
+        SPAN_KIND_KIND,
         SPAN_KIND_NEWLINE,
         SPAN_KIND_OPAQUE_PAYLOAD,
     }
@@ -686,15 +714,15 @@ def _validate_debug_context_spans(
         if span.start == span.end:
             raise ValueError(f"span must not be empty: {span}")
         expected_start = span.end
-        if span.role not in policy._allowed_roles:
-            raise ValueError(f"span role must be one of the allowed roles: {span}")
-        if span.kind not in allowed_kinds:
+        if span.entry_kind not in policy._allowed_kinds:
+            raise ValueError(f"span entry kind must be one of the allowed kinds: {span}")
+        if span.kind not in allowed_span_kinds:
             raise ValueError(f"unsupported span kind: {span}")
         if span.kind == SPAN_KIND_STRUCTURE and span.end != span.start + 1:
             raise ValueError(f"structure span must cover exactly one token: {span}")
-        if span.kind == SPAN_KIND_ROLE:
-            if encoded.input_ids[span.start:span.end] != layout.role_prefix_ids[span.role]:
-                raise ValueError(f"role span does not match the configured role prefix encoding: {span}")
+        if span.kind == SPAN_KIND_KIND:
+            if encoded.input_ids[span.start:span.end] != layout.kind_prefix_ids[span.entry_kind]:
+                raise ValueError(f"kind span does not match the configured kind prefix encoding: {span}")
         if span.kind == SPAN_KIND_NEWLINE:
             if encoded.input_ids[span.start:span.end] != layout.newline_ids:
                 raise ValueError(f"newline span does not match the configured newline encoding: {span}")
