@@ -5,6 +5,7 @@
 ## 文档分工
 
 - [README.md](../README.md)：仓库入口、快速开始、相关文档链接。
+- [docs/agentic-context-markup-language.md](./agentic-context-markup-language.md)：当前 ACML authoring 草案。
 - [examples/agentic-ml/01-ask-and-answer.txt](../examples/agentic-ml/01-ask-and-answer.txt)：最早的概念手稿，保留为历史/附录，不作为当前规范。
 - [examples/xml-authoring/01-code-review-and-patch.xml](../examples/xml-authoring/01-code-review-and-patch.xml)：`XML authoring` 的 worked example，用来帮助人和 LLM Agent 直观看格式，不承担规范定义。
 - 本文：说明三层模型、`v0` 约束、实现边界与待决问题。
@@ -37,23 +38,38 @@
 - 能自然表达结构化内容和 `opaque_payload` 叶子。
 - 不直接暴露最终 wire format 的 special token。
 
-当前探索方向是 XML authoring，因为 mixed content 和嵌套参数在 XML 中通常比 JSON 更自然。本文不冻结 XML 语法细节，只要求它能无损映射到 canonical typed IR，而不直接定义训练时看到的 wire format。
+当前探索方向是 XML authoring，因为 mixed content 和嵌套参数在 XML 中通常比 JSON 更自然。本文不冻结 XML 语法细节，只要求它能无损映射到 authoring-side semantic model，而不直接定义训练时看到的 wire format。
 
-### 2.2 Canonical Typed IR
+在更贴近实现的层面上，当前也在探索一个从 XML authoring 演化出来的专用文本格式 ACML；见 [docs/agentic-context-markup-language.md](./agentic-context-markup-language.md)。
 
-这是仓库内部的规范真相源。
+### 2.2 Semantic Model And Core IR
 
-当前 `v0` 的核心形状可以概括为：
+当前实现里，真正起作用的中间层已经可以分成两档：
 
-- `context.messages: [message, ...]`
-- `message = { role, loss?, content: [opaque_payload, ...] }`
+- 较宽的一档：authoring 侧与 parser/projection 侧共享的语义模型。
+- 较窄的一档：当前 `study_sft` encoder 直接消费的 `v0 core IR`。
+
+这样拆分是因为 ACML/authoring 允许 mixed content 与 `action` 边界，而当前 `study_sft` v0 core 刻意收窄为“entry 内多个 opaque payload”。
+
+当前 `v0 core IR` 的核心形状可以概括为：
+
+- `context.entries: [entry, ...]`
+- `entry = { kind, loss?, content: [opaque_payload, ...] }`
 - `opaque_payload = { text }`
 
 这里的关键约束是：
 
-- `content` 仍然是序列，所以单条 `message` 可以承载多个 payload。
+- `content` 仍然是序列，所以单条 `entry` 可以承载多个 payload。
 - `opaque_payload` 是叶子节点，不在其内部继续承载协议结构。
 - 当前 `v0` 不再把匿名通用嵌套 AST 当成核心能力。
+
+更宽的 authoring-side semantic model 则可以暂时保留：
+
+- `text`
+- `payload`
+- `action`
+
+但它不应自动等同于当前 `study_sft` 的 `v0 core IR`，也不应过早吸收训练投影策略。
 
 ### 2.3 Encoded Protocol
 
@@ -81,15 +97,15 @@
 
 ### 3.1 角色语义
 
-| role | 当前语义 | 近似类比 |
+| kind | 当前语义 | 近似类比 |
 |---|---|---|
 | `observation` | 外部观察、材料、用户输入、工具返回 | `user` |
 | `belief` | 内部状态、规则、关系、工具表、运行模式 | `system` |
 | `me` | 当前步骤的模型输出目标 | `assistant` |
 
-### 3.2 `message` 内容形状
+### 3.2 `entry` 内容形状
 
-`v0` 允许一个 `message` 内有多个 `opaque_payload`，这对多文件、多文档、多段规则都很重要。
+`v0` 允许一个 `entry` 内有多个 `opaque_payload`，这对多文件、多文档、多段规则都很重要。
 
 但 `v0` 也刻意收窄了边界：
 
@@ -101,13 +117,21 @@
 
 ### 3.3 `loss` 语义
 
-训练目标由 message 级 `loss` 显式标记，不按 role 猜测。
+在当前 `study_sft v0 core IR` 中，训练目标由 entry 级 `loss` 显式标记，不按 kind 猜测。
 
 这意味着：
 
 - `observation` 和 `belief` 默认不参与监督。
 - 历史 `me` 可以只是上下文。
 - 当前目标 `me` 是否参与训练，由样本构造层明确写入 `loss: true`。
+
+但在更靠近 ACML/authoring 的层面，`loss` 仍可被视为 bridge / projection 语义，而不必立刻冻结为 ACML core 的普遍承诺。
+
+也就是说：
+
+- `study_sft v0 core IR`：`loss` 是稳定语义。
+- ACML syntax model / shared semantic model：不需要把 `loss` 冻结成共享核心字段。
+- 项目级 adapter / projection：负责解释 `loss="true|false"` 或采用别的 supervision policy。
 
 ## 4. 安全与序列化不变量
 
@@ -145,7 +169,9 @@ untrusted payload encoder 不能产生 reserved structure token id
 
 ```text
 authoring syntax
-  -> typed IR
+  -> syntax model
+  -> semantic model
+  -> project core IR
   -> encoded protocol
 ```
 
@@ -162,7 +188,7 @@ authoring syntax
 当前更合理的态度是：
 
 - 用 XML 做 worked example 和 authoring exploration。
-- 用 typed IR 作为内部真相源。
+- 用 semantic model / core IR 作为内部真相源，而不是把 authoring 文本直接当协议。
 - 等 XML 上的几个关键约束稳定后，再把它规格化成更严格的 authoring 文档。
 
 ### 5.1 当前建议的 authoring 原则
@@ -176,8 +202,8 @@ authoring syntax
 
 [examples/xml-authoring/01-code-review-and-patch.xml](../examples/xml-authoring/01-code-review-and-patch.xml) 只负责展示：
 
-- 角色如何出现。
-- 单条 message 内多个 payload 如何出现。
+- kind 如何出现。
+- 单条 entry 内多个 payload 如何出现。
 - 结构节点与 payload 叶子如何配合。
 - payload 中的字面 special-token 如何保持为普通文本。
 
@@ -203,10 +229,12 @@ authoring syntax
 
 与本文最相关的当前代码层大致如下：
 
-- `src/study_sft/agentic_context_model.py`：canonical typed IR。
+- `src/study_sft/agentic_context_model.py`：当前 `study_sft v0 core IR`。
+- `src/acml/semantic_model.py`：更靠近 authoring 侧的共享语义模型。
 - `src/study_sft/agentic_context_schema.py`：外部对象到 typed IR 的适配入口。
-- `src/study_sft/agentic_context.py`：typed IR 到 encoded protocol 的 encoder、validation 与相关 rich result。
-- `src/study_sft/samples.py`：把 `alpaca/messages/sharegpt` 等格式投影成共享 conversation/context。
+- `src/study_sft/agentic_context.py`：`study_sft v0 core IR` 到 encoded protocol 的 encoder、validation 与相关 rich result。
+- `src/study_sft/adapters/acml.py`：ACML syntax model / shared semantic model 到当前 `study_sft v0 core IR` 的项目级 adapter，并负责解释 sentence-level supervision policy。
+- `src/study_sft/inference_prompts.py`：推理时构造单轮 belief/user prompt 的轻量 helper。
 - `src/study_sft/training_data.py`：训练特征、label 与截断。
 
 这里真正要稳定的是边界，而不是某个具体的 authoring 文本外观。
