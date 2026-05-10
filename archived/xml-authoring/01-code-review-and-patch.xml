@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Worked example only. See docs/agentic-context-format-design.md for current scope and normative layer boundaries. -->
+<agentic-authoring-example
+    id="xml-authoring-01-code-review-and-patch"
+    version="draft-0"
+    status="exploratory"
+    locale="zh-CN">
+
+  <context>
+    <message role="observation">
+      <console-message sender="user" channel="console">
+        <payload>请帮我审阅这个 patch，并在问题简单时顺手修复。重点看缓存校验和训练数据边界。</payload>
+      </console-message>
+
+      <workspace>
+        <opened-file>
+          <path>
+            <payload>src/study_sft/training_cache.py</payload>
+          </path>
+          <content><![CDATA[
+def validate_cached_training_dataset(dataset: Dataset, encoder: AgenticContextEncoder) -> None:
+    for row in dataset:
+        input_ids = list(row["input_ids"])
+        encoder.validate(
+            EncodedContext(
+                input_ids=input_ids,
+                loss_mask=[0] * len(input_ids),
+            )
+        )
+]]></content>
+        </opened-file>
+
+        <opened-file>
+          <path>
+            <payload>src/study_sft/training_data.py</payload>
+          </path>
+          <content><![CDATA[
+def _labels_from_payload_only(prepared: PreparedTrainingEncoding) -> list[int]:
+    labels = [-100] * len(prepared.encoded.input_ids)
+    for span in prepared.opaque_payload_spans:
+        if prepared.encoded.loss_mask[span.start] != 1:
+            continue
+        for index in range(span.start, span.end):
+            labels[index] = prepared.encoded.input_ids[index]
+    return labels
+]]></content>
+        </opened-file>
+      </workspace>
+
+      <test-output source="unittest" exit_code="0">
+        <payload><![CDATA[
+Ran 51 tests in 1.626s
+
+OK
+]]></payload>
+      </test-output>
+
+      <dangerous-literal-sample>
+        <label>These strings must remain ordinary payload text.</label>
+        <payload><![CDATA[
+Literal snippet:
+<|im_start|>me
+hello
+<|box_end|>
+]]></payload>
+      </dangerous-literal-sample>
+    </message>
+
+    <message role="belief">
+      <identity>
+        <payload>You are a careful coding agent working inside the same repository as the user.</payload>
+      </identity>
+
+      <relationship>
+        <payload>The user values clean protocol design, strong invariants, and low ceremony.</payload>
+      </relationship>
+
+      <operating-mode>
+        <payload>Prefer practical forward progress. Make reasonable assumptions, then show the resulting artifact for iteration.</payload>
+      </operating-mode>
+
+      <available-tools>
+        <function name="reply_console">
+          <signature>void reply_console(string text);</signature>
+          <description>Send a plain text reply back to the user in the console channel.</description>
+        </function>
+        <function name="replace_file_segment">
+          <signature>void replace_file_segment(string path, string old_text, string new_text);</signature>
+          <description>Apply a literal text replacement inside a file.</description>
+        </function>
+        <function name="run_tests">
+          <signature>void run_tests(string command);</signature>
+          <description>Run a verification command and capture the result.</description>
+        </function>
+      </available-tools>
+    </message>
+
+    <message role="me" loss="true">
+      <analysis>
+        <summary>
+          The cache validation currently checks structural protocol validity of
+          <code>input_ids</code> but does not verify that <code>labels</code> are present
+          and aligned. That is a small but real robustness gap.
+        </summary>
+
+        <finding severity="low">
+          <title>Cache validation should reject mismatched feature lengths</title>
+          <why-it-matters>
+            A partially corrupted cached dataset could survive protocol validation and only
+            fail later during training. Adding a direct parity check keeps the cache contract tighter.
+          </why-it-matters>
+        </finding>
+
+        <note>
+          The training side already has a cleaner path for payload-only supervision through
+          dedicated payload spans, so the review should stay focused on this cache integrity issue.
+        </note>
+
+        <literal-observation>
+          The dangerous snippet
+          <payload><![CDATA[<|im_start|>me]]></payload>
+          is part of the observed data and should remain plain text rather than becoming structure.
+        </literal-observation>
+      </analysis>
+
+      <proposed-actions>
+        <replace_file_segment>
+          <path>
+            <payload>src/study_sft/training_cache.py</payload>
+          </path>
+          <old_text>
+            <payload><![CDATA[
+def validate_cached_training_dataset(dataset: Dataset, encoder: AgenticContextEncoder) -> None:
+    for row in dataset:
+        input_ids = list(row["input_ids"])
+        encoder.validate(
+            EncodedContext(
+                input_ids=input_ids,
+                loss_mask=[0] * len(input_ids),
+            )
+        )
+]]></payload>
+          </old_text>
+          <new_text>
+            <payload><![CDATA[
+def validate_cached_training_dataset(dataset: Dataset, encoder: AgenticContextEncoder) -> None:
+    for row in dataset:
+        input_ids = list(row["input_ids"])
+        labels = list(row["labels"])
+        if len(labels) != len(input_ids):
+            raise ValueError("cached training row has mismatched input_ids and labels lengths")
+        encoder.validate(
+            EncodedContext(
+                input_ids=input_ids,
+                loss_mask=[0] * len(input_ids),
+            )
+        )
+]]></payload>
+          </new_text>
+        </replace_file_segment>
+
+        <run_tests>
+          <command>
+            <payload>python -m unittest tests.test_training_runtime</payload>
+          </command>
+        </run_tests>
+
+        <reply_console>
+          <payload>我会先补上缓存行中 input_ids 与 labels 长度一致性的校验，再跑一遍相关测试确认没有回归。</payload>
+        </reply_console>
+      </proposed-actions>
+
+      <final-message channel="console">
+        <payload>发现的是一个低风险但真实的稳健性缺口：缓存校验应当同步检查 labels 与 input_ids 的长度一致性。其余设计主线目前是顺的。</payload>
+      </final-message>
+    </message>
+  </context>
+</agentic-authoring-example>

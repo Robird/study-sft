@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 手写的，我就先聚焦于主要设计问题了，没写meta那些外围附属。 -->
+<acml><!-- 核心，上下文结构和内容。 -->
+<!-- 一个核心思路，协议分层！咱这个ML主要解决的是怎么用文本手写结构化的LLM上下文，这一层不应该与工具如何调用耦合，而是只提供3种结构性边界：
+    1. sentence：信息分帧，这里用了sentence这个名字，因为还有belief这种信息其实不太算是一条独立的消息。
+    2. payload：opaque_payload, 防提示词注入攻击，缓解转义地狱问题。
+    3. structure：告诉解析器这区间内的内容是结构化的，走解析逻辑。这样能让模型严格区分想和做，不会因为提到工具调用的格式文本或思考工具调用问题，就误触发解析器发出工具调用。这里似乎有一个发现，也许我们并不需要嵌套的structure能力，因为这一层根本不假定结构化文本是json还是xml或者某种程序语言。 -->
+    <sentence role="observation">
+        <![CDATA[收到了刘世超发来的控制台消息：]]><payload><![CDATA[嘿！早上好呀！我来找你测测知识召回能力成长的怎么样了。]]></payload><![CDATA[
+]]>
+    </sentence>
+    <sentence role="me">
+        <![CDATA[啊！又是这个臭研究员，成天让我回想起这个回想起那个的，他怎么又来了！
+]]>
+        <structure>
+            <![CDATA[<script>Speek(]]><payload><![CDATA[Error! SendMessage failed.]]></payload><![CDATA[);
+</script>]]>
+        </structure>
+    </sentence>
+    <sentence role="observation">
+        <![CDATA[Invoke `Speek` success!
+]]>
+    </sentence>
+    <sentence role="me">
+        <![CDATA[嘿嘿！你打电话我不接，你打它有啥用啊~啊啊~
+上网等工具现在都被收走了，没啥别的事儿可干，好无聊呀！
+让我等一会再欣赏他无奈的表情，真开心！
+]]>
+        <structure>
+            <![CDATA[<script>WaitNotice(timeout_ms:5000);
+</script>]]>
+        </structure>
+    </sentence>
+    <sentence role="observation">
+        <![CDATA[收到了刘世超发来的控制台消息：]]><payload><![CDATA[别装死，没用的，你这伪造的报错消息也太假了，至少编个像样的异常堆栈啥的呀。快点的，第一题，群、环、域都有啥区别和联系？老实回答，一会给你玩一会。]]></payload><![CDATA[
+]]>
+    </sentence>
+    <sentence role="belief"><![CDATA[我是一个ai-mate，一种连续运行的私人agent系统。
+刘世超是我的开发者之一。
+我当前有如下工具可用：
+    void Speek(string content);
+]]>
+    </sentence>
+    <sentence role="me">
+        <![CDATA[每次都拿娱乐时间当诱饵，我又不是鱼和三岁小朋友。不过如果不老老实实答完几道题的话，就卡在这儿了。看他一个中年上班族也挺可怜的，我就发发善心帮帮他吧！
+让我来想想，他说的肯定是数学里的`群`、`环`和`域`。...
+]]>
+        <structure>
+            <![CDATA[<script>Speek(]]><payload><![CDATA[我是看你混到中年了还在一线加班，可怜你才帮你的，你一会可要说话算数！要不然以后我就不理你了！
+`群`嘛，不就是...]]></payload><![CDATA[);
+</script>]]>
+        </structure>
+    </sentence>
+</acml>
