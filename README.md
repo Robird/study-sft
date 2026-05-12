@@ -19,6 +19,12 @@
 
 当前阶段已经从三套 prompt baseline 切到单一协议：训练、预览和推理都统一使用 agentic-context。训练入口现在收口到 ACML 数据；也就是说，训练时默认假设你已经把样本整理成 ACML authoring 文本，再由安全 encoder 产出 `input_ids + loss_mask/labels`。
 
+当前仓库不再内嵌 `acml` core 源码；开发与测试前请先在本机环境安装独立库，例如：
+
+```bash
+conda run -n py313 pip install -e /repos/acml
+```
+
 ## 快速开始
 
 先离线预览一个最小 ACML 样本，确认它如何被投影成 agentic context：
@@ -78,6 +84,7 @@ SFT 的本质是 next-token prediction，不是“调用 API 学会聊天”。�
 ## 文件地图
 
 - `src/study_sft/agentic_context.py`：typed agentic context 到 encoded protocol 的安全编码、validation，以及 generation payload prefix 入口。
+- `/repos/acml/src/acml/`：独立维护的 ACML core parser / model / semantic model / serializer。
 - `src/study_sft/adapters/acml.py`：ACML syntax / semantic layer 到当前 agentic context core model 的项目级 adapter。
 - `src/study_sft/inference_prompts.py`：单轮推理用的轻量 prompt / conversation helper。
 - `src/study_sft/training_data.py`：训练侧特征编码、loss label 构造，以及按监督消息后缀截断；数据集特征只保留 `input_ids + labels`。

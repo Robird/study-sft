@@ -230,7 +230,7 @@ authoring syntax
 与本文最相关的当前代码层大致如下：
 
 - `src/study_sft/agentic_context_model.py`：当前 `study_sft v0 core IR`。
-- `src/acml/semantic_model.py`：更靠近 authoring 侧的共享语义模型。
+- `/repos/acml/src/acml/semantic_model.py`：更靠近 authoring 侧的共享语义模型。
 - `src/study_sft/agentic_context_schema.py`：外部对象到 typed IR 的适配入口。
 - `src/study_sft/agentic_context.py`：`study_sft v0 core IR` 到 encoded protocol 的 encoder、validation 与相关 rich result。
 - `src/study_sft/adapters/acml.py`：ACML syntax model / shared semantic model 到当前 `study_sft v0 core IR` 的项目级 adapter，并负责解释 sentence-level supervision policy。

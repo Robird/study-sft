@@ -1,1 +1,1 @@
-# Tests for the standalone ACML package skeleton.
+# Integration tests that exercise the installed standalone ACML package.
