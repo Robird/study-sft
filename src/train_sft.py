@@ -184,7 +184,6 @@ def build_training_args(args: ScriptArguments) -> TrainingArguments:
     fp16_enabled = args.fp16 and not bf16_enabled
     return TrainingArguments(
         output_dir=args.output_dir,
-        overwrite_output_dir=args.overwrite_output_dir,
         num_train_epochs=args.num_train_epochs,
         max_steps=args.max_steps,
         per_device_train_batch_size=args.per_device_train_batch_size,
@@ -245,7 +244,11 @@ def assert_matching_training_tokenizer(
     training_tokenizer,
 ) -> None:
     training_encoder = AgenticContextEncoder(training_tokenizer)
-    if tokenizer_identity_payload(encoded_dataset_encoder) != tokenizer_identity_payload(training_encoder):
+    encoded_payload = dict(tokenizer_identity_payload(encoded_dataset_encoder))
+    training_payload = dict(tokenizer_identity_payload(training_encoder))
+    encoded_payload.pop("pad_token_id", None)
+    training_payload.pop("pad_token_id", None)
+    if encoded_payload != training_payload:
         raise ValueError("训练 tokenizer 与预编码 tokenizer 不一致，无法安全复用已编码数据")
 
 

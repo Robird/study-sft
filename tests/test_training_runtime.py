@@ -98,6 +98,13 @@ def make_acml_dataset(*documents: str) -> Dataset:
 
 
 class TrainingRuntimeTests(unittest.TestCase):
+    def test_assert_matching_training_tokenizer_ignores_pad_token_difference(self) -> None:
+        encoded_encoder = AgenticContextEncoder(FakeTokenizer())
+        training_tokenizer = FakeTokenizer()
+        training_tokenizer.pad_token_id = 999999
+
+        train_sft.assert_matching_training_tokenizer(encoded_encoder, training_tokenizer)
+
     def test_parse_bloom_level_sampling_weights_parses_mapping(self) -> None:
         self.assertEqual(
             training_dataset.parse_bloom_level_sampling_weights("remember=8, understand=2,apply=1"),
@@ -194,7 +201,7 @@ class TrainingRuntimeTests(unittest.TestCase):
                 shard_dir.mkdir()
                 (shard_dir / "offsets.i32").write_bytes(b"")
                 (shard_dir / "data.jsonl").write_text(
-                    json.dumps({"sample_id": shard_name, "acml": document}, ensure_ascii=False) + "\n",
+                    json.dumps({"sample_id": shard_name, "text": document}, ensure_ascii=False) + "\n",
                     encoding="utf-8",
                 )
 

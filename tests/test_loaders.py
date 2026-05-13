@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from datasets import Dataset
-from study_sft.loaders import get_effective_pad_token_id, load_dataset_source
+from study_sft.loaders import ensure_tokenizer_pad_token, get_effective_pad_token_id, load_dataset_source
 
 
 VALID_ACML = (
@@ -17,9 +17,16 @@ VALID_ACML = (
 
 
 class _DummyTokenizer:
-    def __init__(self, *, pad_token_id=None, eos_token_id=None) -> None:
+    def __init__(self, *, pad_token_id=None, eos_token_id=None, known_tokens=None, unk_token_id=-1) -> None:
+        self.pad_token = None if pad_token_id is None else "<pad>"
         self.pad_token_id = pad_token_id
+        self.eos_token = "</s>"
         self.eos_token_id = eos_token_id
+        self.known_tokens = known_tokens or {}
+        self.unk_token_id = unk_token_id
+
+    def convert_tokens_to_ids(self, token: str) -> int:
+        return self.known_tokens.get(token, self.unk_token_id)
 
 
 class LoaderTests(unittest.TestCase):
@@ -31,11 +38,36 @@ class LoaderTests(unittest.TestCase):
         tokenizer = _DummyTokenizer(pad_token_id=None, eos_token_id=42)
         self.assertEqual(get_effective_pad_token_id(tokenizer), 42)
 
+    def test_ensure_tokenizer_pad_token_prefers_known_pad_token(self) -> None:
+        tokenizer = _DummyTokenizer(
+            pad_token_id=None,
+            eos_token_id=42,
+            known_tokens={"<|PAD_TOKEN|>": 99},
+        )
+
+        ensure_tokenizer_pad_token(tokenizer)
+
+        self.assertEqual(tokenizer.pad_token, "<|PAD_TOKEN|>")
+
     def test_load_dataset_source_reads_acml_column_from_jsonl_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "data.jsonl"
             path.write_text(
                 json.dumps({"sample_id": "sample-1", "acml": VALID_ACML}, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+
+            dataset = load_dataset_source(dataset_path=str(path))
+
+        self.assertEqual(dataset.column_names, ["sample_id", "acml"])
+        self.assertEqual(dataset[0]["sample_id"], "sample-1")
+        self.assertEqual(dataset[0]["acml"], VALID_ACML)
+
+    def test_load_dataset_source_maps_text_column_when_it_contains_acml(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "data.jsonl"
+            path.write_text(
+                json.dumps({"sample_id": "sample-1", "text": VALID_ACML}, ensure_ascii=False) + "\n",
                 encoding="utf-8",
             )
 
@@ -81,11 +113,11 @@ class LoaderTests(unittest.TestCase):
         self.assertEqual(dataset[0]["sample_id"], "sample-1")
         self.assertEqual(dataset[0]["acml"], VALID_ACML)
 
-    def test_load_dataset_source_rejects_jsonl_without_acml_column(self) -> None:
+    def test_load_dataset_source_rejects_jsonl_without_acml_payload(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "data.jsonl"
             path.write_text(
-                json.dumps({"sample_id": "sample-1", "text": VALID_ACML}, ensure_ascii=False) + "\n",
+                json.dumps({"sample_id": "sample-1", "text": "plain text"}, ensure_ascii=False) + "\n",
                 encoding="utf-8",
             )
 

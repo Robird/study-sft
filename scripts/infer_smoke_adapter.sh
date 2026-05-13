@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd -- "${script_dir}/.." && pwd)
+
+cd "${repo_root}"
+
 python src/infer_lora.py \
   --adapter_path /mnt/fast/LLM/study-sft/smoke-acml-lora \
   --load_in_4bit false \
-#   --prompt "用两句话解释 SFT 和预训练的区别。" \
   "$@"

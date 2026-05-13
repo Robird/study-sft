@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd -- "${script_dir}/.." && pwd)
+
 ACML_DATASET_PATH=${ACML_DATASET_PATH:-}
 if [[ -z "${ACML_DATASET_PATH}" ]]; then
-  echo "Set ACML_DATASET_PATH to a .acml file, a JSON/JSONL dataset with an 'acml' column, a bloom-level shard root directory, or a datasets directory containing that column." >&2
+  echo "Set ACML_DATASET_PATH to a .acml file, a JSON/JSONL dataset with an 'acml' or ACML 'text' column, a bloom-level shard root directory, or a datasets directory containing that column." >&2
   exit 1
 fi
+
+cd "${repo_root}"
 
 CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0} python src/train_sft.py \
   --dataset_path "${ACML_DATASET_PATH}" \

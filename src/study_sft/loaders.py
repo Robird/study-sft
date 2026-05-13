@@ -11,9 +11,22 @@ from transformers import AutoTokenizer
 
 
 DEFAULT_MODEL_NAME_OR_PATH = "/mnt/fast/LLM/Qwen3-1.7B-Base"
+DEFAULT_PAD_TOKEN_TEXT = "<|PAD_TOKEN|>"
+
+
+def _normalize_acml_dataset_columns(dataset: Dataset) -> Dataset:
+    if "acml" in dataset.column_names or "text" not in dataset.column_names:
+        return dataset
+    if len(dataset) == 0:
+        return dataset
+    sample = dataset[0].get("text")
+    if isinstance(sample, str) and sample.lstrip().startswith("<acml"):
+        return dataset.rename_column("text", "acml")
+    return dataset
 
 
 def _require_acml_column(dataset: Dataset) -> Dataset:
+    dataset = _normalize_acml_dataset_columns(dataset)
     if "acml" not in dataset.column_names:
         raise ValueError("ACML dataset source must contain a string column named 'acml'")
     return dataset
@@ -29,8 +42,16 @@ def _discover_shard_jsonl_files(path: Path) -> list[str]:
 
 
 def ensure_tokenizer_pad_token(tokenizer: Any) -> Any:
-    if getattr(tokenizer, "pad_token", None) is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    if getattr(tokenizer, "pad_token", None) is not None:
+        return tokenizer
+    convert_tokens_to_ids = getattr(tokenizer, "convert_tokens_to_ids", None)
+    if callable(convert_tokens_to_ids):
+        pad_token_id = convert_tokens_to_ids(DEFAULT_PAD_TOKEN_TEXT)
+        unk_token_id = getattr(tokenizer, "unk_token_id", None)
+        if isinstance(pad_token_id, int) and pad_token_id >= 0 and pad_token_id != unk_token_id:
+            tokenizer.pad_token = DEFAULT_PAD_TOKEN_TEXT
+            return tokenizer
+    tokenizer.pad_token = tokenizer.eos_token
     return tokenizer
 
 

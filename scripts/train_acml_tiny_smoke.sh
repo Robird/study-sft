@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd -- "${script_dir}/.." && pwd)
+
+cd "${repo_root}"
+
 sample_path=$(mktemp --suffix=.acml)
 trap 'rm -f "$sample_path"' EXIT
 
 cat >"$sample_path" <<'EOF'
-<acml version="0"><acml:sentence role="belief">You are a helpful, honest, and concise assistant.</acml:sentence><acml:sentence role="observation">Explain what supervised fine-tuning is in one sentence.</acml:sentence><acml:sentence role="me" loss="true">Supervised fine-tuning teaches a model from labeled input-output examples.</acml:sentence></acml>
+<acml version="0"><acml:entry kind="belief">You are a helpful, honest, and concise assistant.</acml:entry><acml:entry kind="observation">Explain what supervised fine-tuning is in one sentence.</acml:entry><acml:entry kind="me" loss="true">Supervised fine-tuning teaches a model from labeled input-output examples.</acml:entry></acml>
 EOF
 
 CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0} python src/train_sft.py \
   --dataset_path "$sample_path" \
   --output_dir /mnt/fast/LLM/study-sft/smoke-acml-lora \
+  --overwrite_output_dir \
   --max_steps 5 \
   --per_device_train_batch_size 1 \
   --gradient_accumulation_steps 1 \
@@ -21,6 +27,7 @@ CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0} python src/train_sft.py \
   --save_total_limit 1 \
   --max_length 1024 \
   --validate_encoding true \
+  --dataloader_num_workers 0 \
   --load_in_4bit false \
   --report_to none \
   "$@"
