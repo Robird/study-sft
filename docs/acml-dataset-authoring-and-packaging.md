@@ -142,7 +142,41 @@ python src/train_sft.py --dataset_path /path/to/train.jsonl
 - 需要用标准 JSON 转义换行和双引号
 - 不建议手写转义，最好由程序生成
 
-### 4.3 `datasets` 保存的本地目录或 Hub dataset
+### 4.3 按 `bloom_level` 分 shard 的目录
+
+这适合：
+
+- 数据生成侧已经按 `remember` / `understand` / `apply` 等桶输出
+- 想避免海量小文件
+- 还想在训练前保留 `bloom_level` 元数据以便后续重采样
+
+当前训练侧支持把 shard 根目录直接作为 `--dataset_path`：
+
+```text
+shards/
+  remember--0000/
+    data.jsonl
+    offsets.i32
+  understand--0000/
+    data.jsonl
+    offsets.i32
+```
+
+约定是：
+
+- 训练侧会递归读取每个 shard 目录下的 `data.jsonl`
+- 每条 JSON record 都要有一列 ACML 文本，列名固定为 `acml`
+- `bloom_level`、`sample_id` 等额外元数据列会保留下来，便于训练前做分桶采样
+- `offsets.i32` 当前不会被训练侧直接消费；它保留为生成侧索引文件，不影响训练侧直接接入 JSONL
+
+命令示例：
+
+```bash
+python src/train_sft.py \
+  --dataset_path /path/to/shards
+```
+
+### 4.4 `datasets` 保存的本地目录或 Hub dataset
 
 适合：
 
@@ -225,6 +259,23 @@ my-samples/
 - authoring 适合“一个样本一个 `.acml`”
 - training packaging 更适合“一个 `acml` 列数据集”
 
+如果你已经进入分桶生产阶段，也很适合直接维护：
+
+```text
+my-shards/
+  remember--0000/
+    data.jsonl
+    offsets.i32
+  understand--0000/
+    data.jsonl
+    offsets.i32
+  apply--0000/
+    data.jsonl
+    offsets.i32
+```
+
+这样目录表达分桶，record 里的 `bloom_level` 列表达训练语义；后续做 curriculum 或重采样时，不必再从路径字符串里反推。
+
 ## 7. 打包前检查清单
 
 在把样本喂给训练入口前，建议至少检查：
@@ -243,6 +294,22 @@ my-samples/
 - `bash scripts/preview_acml_tiny.sh`
 - `bash scripts/train_acml_tiny_smoke.sh`
 - `ACML_DATASET_PATH=/path/to/train.acml bash scripts/train_acml_dataset.sh`
+
+其中正式训练脚本的 `ACML_DATASET_PATH` 现在也可以直接指向 shard 根目录。
+
+如果你要先高比例训练低阶任务，再逐步提高高阶任务占比，可以在训练入口传：
+
+```bash
+python src/train_sft.py \
+  --dataset_path /path/to/shards \
+  --bloom_level_sampling_weights remember=8,understand=2,apply=1
+```
+
+当前这一步是“训练前重采样”，不是在线 sampler：
+
+- 未列出的 `bloom_level` 默认权重为 `1`
+- `0` 表示本轮训练中排除该桶
+- 重采样会保持 epoch 样本总数不变，并在编码前完成
 
 这三条脚本分别对应：
 

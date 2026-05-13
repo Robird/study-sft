@@ -31,7 +31,10 @@ from study_sft.training_data import TrainingEncodingConfig, TrainingLabelPolicy
 from study_sft.training_dataset import (
     DatasetLocator,
     TrainingDatasetBuildOptions,
+    bloom_level_counts,
+    parse_bloom_level_sampling_weights,
     prepare_training_dataset,
+    resample_dataset_by_bloom_level,
     tokenizer_identity_payload,
 )
 from study_sft.training_runtime import AgenticDataCollator
@@ -63,6 +66,7 @@ class ScriptArguments:
     dataset_path: Optional[str] = None
     dataset_split: str = "train"
     limit_train_samples: Optional[int] = None
+    bloom_level_sampling_weights: Optional[str] = None
     label_policy: TrainingLabelPolicy = "entry"
 
     output_dir: str = "/mnt/fast/LLM/study-sft/qwen3-1.7b-agentic-lora"
@@ -107,6 +111,14 @@ def parse_args() -> ScriptArguments:
     add_model_source_args(parser, default_model_name=defaults.model_name_or_path)
     add_dataset_source_args(parser)
     parser.add_argument("--limit_train_samples", type=int)
+    parser.add_argument(
+        "--bloom_level_sampling_weights",
+        default=defaults.bloom_level_sampling_weights,
+        help=(
+            "按 bloom_level 做训练前重采样，格式如 remember=8,understand=2,apply=1。"
+            "未列出的 level 默认权重为 1；0 表示在该轮训练中排除。"
+        ),
+    )
     parser.add_argument("--label_policy", choices=["entry", "payload_only"], default=defaults.label_policy)
 
     parser.add_argument("--output_dir", default=defaults.output_dir)
@@ -301,6 +313,17 @@ def build_train_dataset(
         dataset_name=args.dataset_name,
         dataset_config=args.dataset_config,
         dataset_split=args.dataset_split,
+        logger=LOGGER,
+    )
+    sampling_weights = parse_bloom_level_sampling_weights(args.bloom_level_sampling_weights)
+    if sampling_weights:
+        raw_bloom_counts = bloom_level_counts(raw_dataset)
+        if raw_bloom_counts:
+            LOGGER.info("原始 bloom_level 分布: %s", json.dumps(raw_bloom_counts, ensure_ascii=False))
+    raw_dataset = resample_dataset_by_bloom_level(
+        raw_dataset,
+        weights=sampling_weights,
+        seed=args.seed,
         logger=LOGGER,
     )
     return prepare_training_dataset(

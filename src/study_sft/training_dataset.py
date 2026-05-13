@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import random
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Mapping
 
 from datasets import Dataset
 
@@ -32,6 +34,83 @@ class TrainingDatasetBuildOptions:
     validate_encoding: bool = False
     limit_train_samples: int | None = None
     cache_dir: Path | None = None
+
+
+def parse_bloom_level_sampling_weights(spec: str | None) -> dict[str, float]:
+    if spec is None:
+        return {}
+    items = [item.strip() for item in spec.split(",") if item.strip()]
+    if not items:
+        raise ValueError("bloom_level_sampling_weights 不能为空字符串")
+
+    weights: dict[str, float] = {}
+    for item in items:
+        if "=" not in item:
+            raise ValueError(
+                "bloom_level_sampling_weights 必须使用 level=weight 形式，例如 remember=8,understand=2"
+            )
+        level, raw_weight = item.split("=", 1)
+        bloom_level = level.strip()
+        if not bloom_level:
+            raise ValueError("bloom_level_sampling_weights 中存在空 bloom_level 名称")
+        try:
+            weight = float(raw_weight)
+        except ValueError as exc:
+            raise ValueError(f"无法解析 bloom_level 权重: {item!r}") from exc
+        if weight < 0:
+            raise ValueError(f"bloom_level 权重不能为负数: {item!r}")
+        weights[bloom_level] = weight
+    return weights
+
+
+def bloom_level_counts(dataset: Dataset) -> dict[str, int]:
+    if "bloom_level" not in dataset.column_names:
+        return {}
+    counts: dict[str, int] = {}
+    for index, value in enumerate(dataset["bloom_level"]):
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"record[{index}] 缺少有效的 bloom_level 字段")
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def resample_dataset_by_bloom_level(
+    dataset: Dataset,
+    *,
+    weights: Mapping[str, float],
+    seed: int,
+    logger: logging.Logger | None = None,
+) -> Dataset:
+    if not weights or len(dataset) == 0:
+        return dataset
+    if "bloom_level" not in dataset.column_names:
+        raise ValueError("当前数据集没有 bloom_level 列，无法应用 --bloom_level_sampling_weights")
+
+    item_weights: list[float] = []
+    for index, bloom_level in enumerate(dataset["bloom_level"]):
+        if not isinstance(bloom_level, str) or not bloom_level:
+            raise ValueError(f"record[{index}] 缺少有效的 bloom_level 字段")
+        item_weights.append(weights.get(bloom_level, 1.0))
+
+    if sum(item_weights) <= 0:
+        raise ValueError("bloom_level_sampling_weights 使所有样本权重都变成了 0")
+
+    if logger is not None:
+        logger.info(
+            "应用 bloom_level 重采样: weights=%s, before=%s",
+            json.dumps(dict(sorted(weights.items())), ensure_ascii=False),
+            json.dumps(bloom_level_counts(dataset), ensure_ascii=False),
+        )
+
+    sampled_indices = random.Random(seed).choices(range(len(dataset)), weights=item_weights, k=len(dataset))
+    sampled_dataset = dataset.select(sampled_indices)
+
+    if logger is not None:
+        logger.info(
+            "bloom_level 重采样完成: after=%s",
+            json.dumps(bloom_level_counts(sampled_dataset), ensure_ascii=False),
+        )
+    return sampled_dataset
 
 
 def tokenizer_identity_payload(encoder: AgenticContextEncoder) -> dict[str, object]:

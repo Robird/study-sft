@@ -13,6 +13,21 @@ from transformers import AutoTokenizer
 DEFAULT_MODEL_NAME_OR_PATH = "/mnt/fast/LLM/Qwen3-1.7B-Base"
 
 
+def _require_acml_column(dataset: Dataset) -> Dataset:
+    if "acml" not in dataset.column_names:
+        raise ValueError("ACML dataset source must contain a string column named 'acml'")
+    return dataset
+
+
+def _load_local_json_dataset(data_files: str | list[str], *, dataset_split: str) -> Dataset:
+    dataset = load_dataset("json", data_files=data_files, split=dataset_split)
+    return _require_acml_column(dataset)
+
+
+def _discover_shard_jsonl_files(path: Path) -> list[str]:
+    return sorted(str(child) for child in path.rglob("data.jsonl") if child.is_file())
+
+
 def ensure_tokenizer_pad_token(tokenizer: Any) -> Any:
     if getattr(tokenizer, "pad_token", None) is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -53,16 +68,22 @@ def load_dataset_source(
         if path.is_file():
             if path.suffix == ".acml":
                 return Dataset.from_dict({"acml": [path.read_text(encoding="utf-8")]})
-            return load_dataset("json", data_files=str(path), split=dataset_split)
+            return _load_local_json_dataset(str(path), dataset_split=dataset_split)
+        shard_jsonl_files = _discover_shard_jsonl_files(path)
+        if shard_jsonl_files:
+            if logger is not None:
+                logger.info("从本地 shard 目录加载 JSONL 数据: %s (shards=%d)", path, len(shard_jsonl_files))
+            return _load_local_json_dataset(shard_jsonl_files, dataset_split=dataset_split)
         loaded = load_from_disk(str(path))
         if isinstance(loaded, DatasetDict):
             if dataset_split not in loaded:
                 raise ValueError(f"本地数据集目录缺少 split {dataset_split!r}: {path}")
-            return loaded[dataset_split]
-        return loaded
+            return _require_acml_column(loaded[dataset_split])
+        return _require_acml_column(loaded)
 
     if not dataset_name:
         raise ValueError("必须指定 --dataset_path 或 --dataset_name")
     if logger is not None:
         logger.info("从 Hub 加载数据集: %s", dataset_name)
-    return load_dataset(dataset_name, dataset_config, split=dataset_split)
+    dataset = load_dataset(dataset_name, dataset_config, split=dataset_split)
+    return _require_acml_column(dataset)

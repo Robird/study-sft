@@ -47,8 +47,15 @@ def add_model_source_args(
 def add_dataset_source_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dataset_name")
     parser.add_argument("--dataset_config")
-    parser.add_argument("--dataset_path")
-    parser.add_argument("--dataset_split", default="train")
+    parser.add_argument(
+        "--dataset_path",
+        help=(
+            "本地数据源路径。支持单个 .acml 文件、包含 acml 列的 JSON/JSONL 文件、"
+            "按 bloom_level 分 shard 的根目录（递归读取 */data.jsonl），"
+            "或 datasets.save_to_disk 导出的本地目录。"
+        ),
+    )
+    parser.add_argument("--dataset_split", default="train", help="Hub dataset 或本地 datasets 目录的 split 名称")
 
 
 def add_belief_prompt_arg(parser: argparse.ArgumentParser) -> None:

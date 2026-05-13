@@ -3,7 +3,7 @@ set -euo pipefail
 
 ACML_DATASET_PATH=${ACML_DATASET_PATH:-}
 if [[ -z "${ACML_DATASET_PATH}" ]]; then
-  echo "Set ACML_DATASET_PATH to a .acml file, a JSON/JSONL dataset with an 'acml' column, or a datasets directory containing that column." >&2
+  echo "Set ACML_DATASET_PATH to a .acml file, a JSON/JSONL dataset with an 'acml' column, a bloom-level shard root directory, or a datasets directory containing that column." >&2
   exit 1
 fi
 

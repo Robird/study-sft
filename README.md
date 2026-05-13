@@ -60,6 +60,17 @@ bash scripts/infer_smoke_adapter.sh
 ACML_DATASET_PATH=/path/to/train.acml bash scripts/train_acml_dataset.sh
 ```
 
+这里的 `ACML_DATASET_PATH` 现在也可以直接指向按 `bloom_level` 分 shard 的根目录；训练侧会递归读取各个 `data.jsonl`。
+
+如果你想先高比例训练 `remember`，再逐步提高 `understand` / `apply`，可以直接给训练入口加：
+
+```bash
+ACML_DATASET_PATH=/path/to/shards bash scripts/train_acml_dataset.sh \
+  --bloom_level_sampling_weights remember=8,understand=2,apply=1
+```
+
+这一步会在训练前按 `bloom_level` 做确定性重采样，保持总样本数不变，便于你按轮次做 curriculum。
+
 当前本机 `bitsandbytes` 会报 `libnvJitLink.so.13` 缺失，所以脚本默认使用 bf16 LoRA + `adamw_torch`，不走 4bit 量化和 8bit optimizer。修好 CUDA 13 runtime 的 `LD_LIBRARY_PATH` 后，可以给训练脚本加 `--load_in_4bit true --optim adamw_8bit` 切回 QLoRA 路径。
 
 ## 你需要学清楚的核心点
@@ -89,7 +100,7 @@ SFT 的本质是 next-token prediction，不是“调用 API 学会聊天”。�
 - `src/study_sft/inference_prompts.py`：单轮推理用的轻量 prompt / conversation helper。
 - `src/study_sft/training_data.py`：训练侧特征编码、loss label 构造，以及按监督消息后缀截断；数据集特征只保留 `input_ids + labels`。
 - `src/preview_data.py`：默认预览 context JSON；需要时可额外打印 token 文本和 debug spans。
-- `src/train_sft.py`：Unsloth + LoRA/QLoRA + pretokenized `Trainer` 的 ACML-only 训练入口。
+- `src/train_sft.py`：Unsloth + LoRA/QLoRA + pretokenized `Trainer` 的 ACML-only 训练入口；支持 shard 根目录输入和按 `bloom_level` 的训练前重采样。
 - `src/infer_lora.py`：加载 LoRA adapter，用 agentic generation payload prefix 做快速生成验证。
 - `src/pack_acml_dataset.py`：把一批 `.acml` 样本文件打包成 `jsonl` 或 `datasets` 数据集。
 - `src/validate_acml_dataset.py`：对 ACML 数据集逐条做 parse / role / supervision 检查。

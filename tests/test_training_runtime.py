@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import tempfile
+import train_sft
 import unittest
 from unittest.mock import patch
 
@@ -97,6 +98,64 @@ def make_acml_dataset(*documents: str) -> Dataset:
 
 
 class TrainingRuntimeTests(unittest.TestCase):
+    def test_parse_bloom_level_sampling_weights_parses_mapping(self) -> None:
+        self.assertEqual(
+            training_dataset.parse_bloom_level_sampling_weights("remember=8, understand=2,apply=1"),
+            {"remember": 8.0, "understand": 2.0, "apply": 1.0},
+        )
+
+    def test_resample_dataset_by_bloom_level_can_exclude_a_bucket(self) -> None:
+        dataset = Dataset.from_dict(
+            {
+                "acml": [
+                    make_acml_document(observation="Q1", answer="A1"),
+                    make_acml_document(observation="Q2", answer="A2"),
+                    make_acml_document(observation="Q3", answer="A3"),
+                    make_acml_document(observation="Q4", answer="A4"),
+                ],
+                "bloom_level": ["remember", "understand", "remember", "understand"],
+            }
+        )
+
+        sampled = training_dataset.resample_dataset_by_bloom_level(
+            dataset,
+            weights={"remember": 1.0, "understand": 0.0},
+            seed=42,
+        )
+
+        self.assertEqual(len(sampled), len(dataset))
+        self.assertEqual(set(sampled["bloom_level"]), {"remember"})
+
+    def test_resample_dataset_by_bloom_level_requires_column_when_enabled(self) -> None:
+        dataset = make_acml_dataset(make_acml_document())
+
+        with self.assertRaisesRegex(ValueError, "没有 bloom_level 列"):
+            training_dataset.resample_dataset_by_bloom_level(
+                dataset,
+                weights={"remember": 4.0},
+                seed=42,
+            )
+
+    def test_build_train_dataset_skips_bloom_validation_when_sampling_disabled(self) -> None:
+        raw_dataset = Dataset.from_dict(
+            {
+                "acml": [make_acml_document()],
+                "bloom_level": [""],
+            }
+        )
+        encoded_dataset = Dataset.from_dict({"input_ids": [[1, 2]], "labels": [[-100, 2]]})
+
+        with patch("train_sft.load_dataset_source", return_value=raw_dataset), patch(
+            "train_sft.prepare_training_dataset",
+            return_value=encoded_dataset,
+        ):
+            dataset = train_sft.build_train_dataset(
+                train_sft.ScriptArguments(dataset_path="/tmp/unit-test"),
+                AgenticContextEncoder(FakeTokenizer()),
+            )
+
+        self.assertEqual(dataset.column_names, ["input_ids", "labels"])
+
     def test_encode_training_dataset_removes_source_columns(self) -> None:
         dataset = make_acml_dataset(
             make_acml_document(observation="Explain SFT", answer="Answer one"),
@@ -123,6 +182,31 @@ class TrainingRuntimeTests(unittest.TestCase):
         )
 
         self.assertEqual(len(encoded), 0)
+
+    def test_prepare_training_dataset_accepts_jsonl_shard_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            for shard_name, document in {
+                "analyze--0000": make_acml_document(observation="Explain SFT", answer="Answer one"),
+                "apply--0000": make_acml_document(observation="Explain LoRA", answer="Answer two"),
+            }.items():
+                shard_dir = root / shard_name
+                shard_dir.mkdir()
+                (shard_dir / "offsets.i32").write_bytes(b"")
+                (shard_dir / "data.jsonl").write_text(
+                    json.dumps({"sample_id": shard_name, "acml": document}, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
+
+            dataset = load_dataset_source(dataset_path=str(root))
+            encoded = prepare_training_dataset(
+                dataset,
+                encoder=AgenticContextEncoder(FakeTokenizer()),
+                encoding_config=make_encoding_config(),
+            )
+
+        self.assertEqual(len(encoded), 2)
+        self.assertEqual(encoded.column_names, ["input_ids", "labels"])
 
     def test_prepare_training_dataset_rejects_negative_limit(self) -> None:
         dataset = make_acml_dataset(make_acml_document())
