@@ -12,7 +12,7 @@ fi
 
 cd "${repo_root}"
 
-CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0} python src/train_sft.py \
+CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-1} python src/train_sft.py \
   --dataset_path "${ACML_DATASET_PATH}" \
   --output_dir /mnt/fast/LLM/study-sft/qwen3-1.7b-acml-lora \
   --num_train_epochs 1 \
