@@ -76,7 +76,7 @@ def validate_acml_records(
     *,
     allowed_kinds: Sequence[str] = DEFAULT_ALLOWED_KINDS,
     require_supervision: bool = True,
-    loss_policy: ACMLLossPolicy = "explicit",
+    loss_policy: ACMLLossPolicy = "all_me",
     max_issues: int | None = None,
 ) -> ACMLValidationReport:
     allowed_kind_set = set(allowed_kinds)

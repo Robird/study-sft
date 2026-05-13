@@ -41,7 +41,7 @@ ACML authoring text
 
 - 一条条 ACML document
 - 每条 document 能被投影成一个 training `AgenticContext`
-- 其中至少有一条 entry 明确参与监督
+- 其中至少有一条 entry 在当前 loss policy 下参与监督
 
 ## 2. 单条样本的最低要求
 
@@ -50,15 +50,16 @@ ACML authoring text
 - 根元素使用 `<acml version="0"> ... </acml>`
 - 每条顶层分段使用 `<acml:entry kind="..."> ... </acml:entry>`
 - kind 使用当前项目已稳定的 `belief` / `observation` / `me`
-- 至少有一条 entry 带 `loss="true"`
+- 默认 `all_me` policy 下，至少有一条 `kind="me"` entry
+- 如果切回 `explicit` policy，则至少有一条 entry 带 `loss="true"`
 
-当前训练入口默认按 `explicit` supervision policy 解释 ACML。
+当前训练入口默认按 `all_me` supervision policy 解释 ACML。
 
 也就是说：
 
-- 只有显式 `loss="true"` 的句子会参与监督
-- 只有显式 `loss="true"` 的 entry 会参与监督
-- 没有任何 `loss="true"` 的 document 会在训练编码阶段报错
+- 默认情况下，所有 `kind="me"` 的 entry 会参与监督
+- `loss="true|false"` 仍然保留为可选 bridge 属性，供切到 `explicit` policy 时使用
+- 如果一个 document 没有任何 `kind="me"`，则会在训练编码阶段报错
 
 最小可训练示例：
 
@@ -66,7 +67,7 @@ ACML authoring text
 <acml version="0">
 <acml:entry kind="belief">You are a helpful, honest, and concise assistant.</acml:entry>
 <acml:entry kind="observation">Explain what supervised fine-tuning is in one sentence.</acml:entry>
-<acml:entry kind="me" loss="true">Supervised fine-tuning teaches a model from labeled input-output examples.</acml:entry>
+<acml:entry kind="me">Supervised fine-tuning teaches a model from labeled input-output examples.</acml:entry>
 </acml>
 ```
 
@@ -75,7 +76,7 @@ ACML authoring text
 为了让训练样本更稳定、也更便于后续自动处理，推荐遵守这些约定：
 
 - 一条 ACML document 只表达一个训练样本。
-- 推荐每条样本只有一个主要监督目标，即只给一条 `kind="me"` entry 标 `loss="true"`。
+- 推荐每条样本只有一个主要监督目标；在默认 `all_me` 下，这通常意味着只有一条 `kind="me"` entry。
 - `belief` 放稳定规则、身份、运行模式。
 - `observation` 放用户输入、工具结果、材料、文件片段等外部信息。
 - `me` 放模型当前这一步应该产出的内容。
@@ -88,7 +89,7 @@ ACML authoring text
 
 - 一个 document
 - 一个主目标 `me`
-- 一个显式 `loss="true"`
+- 如果启用 `explicit`，再只给这一条目标显式标 `loss="true"`
 
 这样最直观，也最容易检查。
 
@@ -230,7 +231,7 @@ my-samples/
 
 - 每条 record 都有 `acml` 列
 - 每条 `acml` 都能被 parser 正确解析
-- 每条训练样本至少有一个 `loss="true"`
+- 每条训练样本在当前 loss policy 下至少有一个 supervised entry
 - 没有把大段原文错误塞进 attribute
 - 角色只使用当前项目支持的集合
 - 样本没有明显重复或空 document

@@ -46,7 +46,7 @@ class TrainingDataTests(unittest.TestCase):
         context = agentic_context_from_acml_record(
             {
                 "acml": '<acml version="0"><acml:entry kind="observation">question</acml:entry>'
-                '<acml:entry kind="me" loss="true">answer</acml:entry></acml>'
+                '<acml:entry kind="me">answer</acml:entry></acml>'
             }
         )
 
@@ -85,7 +85,8 @@ class TrainingDataTests(unittest.TestCase):
             {
                 "acml": '<acml version="0"><acml:entry kind="observation">question</acml:entry>'
                 '<acml:entry kind="me">answer</acml:entry></acml>'
-            }
+            },
+            loss_policy="explicit",
         )
 
         with self.assertRaisesRegex(ValueError, "no supervised labels"):
@@ -121,14 +122,16 @@ class TrainingDataTests(unittest.TestCase):
                 '<acml:entry kind="me">Answer 1</acml:entry>'
                 '<acml:entry kind="observation">Question 2</acml:entry>'
                 '<acml:entry kind="me" loss="true">Final answer that should stay intact.</acml:entry></acml>'
-            }
+            },
+            loss_policy="explicit",
         )
         target_only_context = agentic_context_from_acml_record(
             {
                 "acml": '<acml version="0"><acml:entry kind="me" loss="true">'
                 "Final answer that should stay intact."
                 "</acml:entry></acml>"
-            }
+            },
+            loss_policy="explicit",
         )
 
         target_only_length = len(encode_training_context(target_only_context, encoder)["input_ids"])
@@ -152,12 +155,14 @@ class TrainingDataTests(unittest.TestCase):
                 '<acml:entry kind="me">Answer 1</acml:entry>'
                 '<acml:entry kind="observation">Question 2</acml:entry>'
                 '<acml:entry kind="me" loss="true">payload</acml:entry></acml>'
-            }
+            },
+            loss_policy="explicit",
         )
         target_only_context = agentic_context_from_acml_record(
             {
                 "acml": '<acml version="0"><acml:entry kind="me" loss="true">payload</acml:entry></acml>',
-            }
+            },
+            loss_policy="explicit",
         )
 
         target_only_length = len(

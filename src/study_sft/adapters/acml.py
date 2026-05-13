@@ -18,8 +18,8 @@ from study_sft.agentic_context_model import AgenticContext, AgenticEntry, Agenti
 
 
 ActionLoweringPolicy = Literal["render_text", "reject"]
-ACMLLossPolicy = Literal["explicit", "none", "all_me", "all_entries"]
-SemanticLossPolicy = Literal["none", "all_me", "all_entries"]
+KindLossPolicy = Literal["none", "all_me", "all_entries"]
+ACMLLossPolicy = Literal["explicit"] | KindLossPolicy
 
 
 def semantic_context_from_acml_document(document: Document) -> SemanticContext:
@@ -34,7 +34,7 @@ def agentic_context_from_acml_document(
     document: Document,
     *,
     action_policy: ActionLoweringPolicy = "render_text",
-    loss_policy: ACMLLossPolicy = "explicit",
+    loss_policy: ACMLLossPolicy = "all_me",
 ) -> AgenticContext:
     semantic_context = semantic_context_from_acml_document(document)
     entry_losses = _entry_losses_from_document(document, loss_policy=loss_policy)
@@ -49,7 +49,7 @@ def agentic_context_from_acml_text(
     source: str,
     *,
     action_policy: ActionLoweringPolicy = "render_text",
-    loss_policy: ACMLLossPolicy = "explicit",
+    loss_policy: ACMLLossPolicy = "all_me",
 ) -> AgenticContext:
     return agentic_context_from_acml_document(
         parse_document(source),
@@ -62,7 +62,7 @@ def agentic_context_from_acml_record(
     record: dict[str, Any],
     *,
     action_policy: ActionLoweringPolicy = "render_text",
-    loss_policy: ACMLLossPolicy = "explicit",
+    loss_policy: ACMLLossPolicy = "all_me",
 ) -> AgenticContext:
     source = record.get("acml")
     if not isinstance(source, str) or not source:
@@ -78,7 +78,7 @@ def agentic_context_from_semantic_context(
     context: SemanticContext,
     *,
     action_policy: ActionLoweringPolicy = "render_text",
-    loss_policy: SemanticLossPolicy = "none",
+    loss_policy: KindLossPolicy = "all_me",
 ) -> AgenticContext:
     entry_losses = tuple(_entry_loss_from_kind(entry.kind, loss_policy=loss_policy) for entry in context.entries)
     return _agentic_context_from_semantic_context(
@@ -149,7 +149,7 @@ def _entry_losses_from_document(document: Document, *, loss_policy: ACMLLossPoli
     return tuple(_entry_loss_from_kind(entry.kind, loss_policy=loss_policy) for entry in document.entries)
 
 
-def _entry_loss_from_kind(kind: str, *, loss_policy: SemanticLossPolicy) -> bool:
+def _entry_loss_from_kind(kind: str, *, loss_policy: KindLossPolicy) -> bool:
     if loss_policy == "none":
         return False
     if loss_policy == "all_me":

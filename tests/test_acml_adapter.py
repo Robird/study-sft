@@ -23,9 +23,17 @@ class StudySFTACMLAdapterTests(unittest.TestCase):
         self.assertEqual(context.entries[0].attrs, (Attribute("loss", "true"),))
         self.assertEqual(len(context.entries[0].content), 2)
 
-    def test_agentic_context_from_acml_text_uses_explicit_entry_loss_hints(self) -> None:
+    def test_agentic_context_from_acml_text_defaults_to_all_me(self) -> None:
         context = agentic_context_from_acml_text(
-            '<acml version="0"><acml:entry kind="me" loss="true">thought<acml:action>Call(<acml:payload>y</acml:payload>)</acml:action></acml:entry></acml>'
+            '<acml version="0"><acml:entry kind="belief">rules</acml:entry><acml:entry kind="me">answer</acml:entry></acml>'
+        )
+
+        self.assertEqual([entry.loss for entry in context.entries], [False, True])
+
+    def test_agentic_context_from_acml_text_can_use_explicit_entry_loss_hints(self) -> None:
+        context = agentic_context_from_acml_text(
+            '<acml version="0"><acml:entry kind="belief" loss="true">rules</acml:entry><acml:entry kind="me">answer</acml:entry></acml>',
+            loss_policy="explicit",
         )
 
         self.assertEqual(
@@ -33,13 +41,11 @@ class StudySFTACMLAdapterTests(unittest.TestCase):
             AgenticContext(
                 entries=(
                     AgenticEntry(
-                        kind="me",
+                        kind="belief",
                         loss=True,
-                        content=(
-                            AgenticOpaquePayload("thought"),
-                            AgenticOpaquePayload("Call(y)"),
-                        ),
+                        content=(AgenticOpaquePayload("rules"),),
                     ),
+                    AgenticEntry(kind="me", loss=False, content=(AgenticOpaquePayload("answer"),)),
                 )
             ),
         )
