@@ -359,6 +359,112 @@ def format_generation_result(result: SingleTurnGenerationResult) -> str:
     return f"{text}\n{status}"
 
 
+def format_generation_token_debug(
+    result: SingleTurnGenerationResult,
+    *,
+    encoder: AgenticContextEncoder,
+    tokenizer: PreTrainedTokenizerBase,
+    max_tokens: int = 256,
+) -> str:
+    """Render raw generation tokens for diagnosing structural-token behavior."""
+
+    token_table = encoder.policy.token_table
+    output_ids = _limit_token_ids(result.output_ids, max_tokens=max_tokens)
+    content_ids = _limit_token_ids(result.content_ids, max_tokens=max_tokens)
+    structural_hits = [
+        f"{name}={token_id}"
+        for name, token_id in token_table.id_by_name().items()
+        if token_id in result.output_ids
+    ]
+
+    lines = [
+        "[debug_tokens]",
+        (
+            f"stop_reason={result.stop_reason}, clean_termination={str(result.clean_termination).lower()}, "
+            f"parser_state={result.parser_state_at_stop}, detail={result.termination_detail or '-'}"
+        ),
+        f"output_ids_len={len(result.output_ids)}, content_ids_len={len(result.content_ids)}",
+        f"output_ids={output_ids}",
+        f"content_ids={content_ids}",
+        f"structural_hits={', '.join(structural_hits) if structural_hits else 'none'}",
+        "idx token_id token_name decoded token_text kept",
+    ]
+
+    for index, token_id in enumerate(result.output_ids[: _token_limit_slice(max_tokens)]):
+        lines.append(
+            " ".join(
+                [
+                    f"{index:03d}",
+                    str(token_id),
+                    _token_name(token_id, encoder=encoder, tokenizer=tokenizer) or "-",
+                    repr(_decode_single_token(token_id, tokenizer=tokenizer)),
+                    repr(_token_text(token_id, tokenizer=tokenizer)),
+                    _kept_marker(index, token_id, result.content_ids),
+                ]
+            )
+        )
+    if max_tokens > 0 and len(result.output_ids) > max_tokens:
+        lines.append(f"... truncated {len(result.output_ids) - max_tokens} token rows")
+    return "\n".join(lines)
+
+
+def _token_limit_slice(max_tokens: int) -> int | None:
+    if max_tokens <= 0:
+        return None
+    return max_tokens
+
+
+def _limit_token_ids(token_ids: list[int], *, max_tokens: int) -> list[int] | str:
+    if max_tokens <= 0 or len(token_ids) <= max_tokens:
+        return list(token_ids)
+    shown = ", ".join(str(token_id) for token_id in token_ids[:max_tokens])
+    return f"[{shown}, ... truncated {len(token_ids) - max_tokens}]"
+
+
+def _token_name(
+    token_id: int,
+    *,
+    encoder: AgenticContextEncoder,
+    tokenizer: PreTrainedTokenizerBase,
+) -> str | None:
+    structural_name = encoder.policy.token_table.name_for_id(token_id)
+    if structural_name is not None:
+        return structural_name
+    if token_id == getattr(tokenizer, "eos_token_id", None):
+        return "eos_token"
+    if token_id == getattr(tokenizer, "pad_token_id", None):
+        return "pad_token"
+    if token_id == getattr(tokenizer, "unk_token_id", None):
+        return "unk_token"
+    return None
+
+
+def _decode_single_token(token_id: int, *, tokenizer: PreTrainedTokenizerBase) -> str:
+    try:
+        return tokenizer.decode([token_id], skip_special_tokens=False)
+    except Exception as exc:  # pragma: no cover - defensive for tokenizer-specific failures.
+        return f"<decode_error:{exc.__class__.__name__}>"
+
+
+def _token_text(token_id: int, *, tokenizer: PreTrainedTokenizerBase) -> str:
+    convert_ids_to_tokens = getattr(tokenizer, "convert_ids_to_tokens", None)
+    if not callable(convert_ids_to_tokens):
+        return ""
+    try:
+        token = convert_ids_to_tokens(token_id)
+    except Exception as exc:  # pragma: no cover - defensive for tokenizer-specific failures.
+        return f"<token_error:{exc.__class__.__name__}>"
+    if isinstance(token, str):
+        return token
+    return repr(token)
+
+
+def _kept_marker(index: int, token_id: int, content_ids: list[int]) -> str:
+    if index < len(content_ids) and content_ids[index] == token_id:
+        return "kept"
+    return "-"
+
+
 def prepare_single_turn_generation(
     user_text: str,
     encoder: AgenticContextEncoder,

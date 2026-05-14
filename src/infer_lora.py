@@ -17,6 +17,7 @@ from study_sft.inference_runtime import (
     GENERATION_MODE_ENTRY,
     SingleTurnGenerationResult,
     format_generation_result,
+    format_generation_token_debug,
     generate_single_turn_result,
     load_lora_inference_model,
 )
@@ -50,6 +51,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max_new_tokens", type=int, default=256)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top_p", type=float, default=0.9)
+    add_optional_bool_arg(
+        parser,
+        "--debug_tokens",
+        default=False,
+        help="打印原始生成 token id、逐 token 解码和结构 token 命中情况，用于诊断 ACML 结构输出。",
+    )
+    parser.add_argument(
+        "--debug_token_limit",
+        type=int,
+        default=256,
+        help="debug token 行和 id 列表最多展示多少个 token；设为 0 表示不截断。",
+    )
     add_optional_bool_arg(parser, "--load_in_4bit", default=False)
     args = parser.parse_args()
 
@@ -89,6 +102,29 @@ def generate_once(
     )
 
 
+def format_interactive_result(
+    result: SingleTurnGenerationResult,
+    *,
+    args: argparse.Namespace,
+    encoder: AgenticContextEncoder,
+    tokenizer,
+) -> str:
+    rendered = format_generation_result(result)
+    if not args.debug_tokens:
+        return rendered
+    return "\n".join(
+        [
+            rendered,
+            format_generation_token_debug(
+                result,
+                encoder=encoder,
+                tokenizer=tokenizer,
+                max_tokens=args.debug_token_limit,
+            ),
+        ]
+    )
+
+
 def run_interactive(
     args: argparse.Namespace,
     encoder: AgenticContextEncoder,
@@ -107,7 +143,8 @@ def run_interactive(
         print("\nobservation>")
         print(initial_prompt)
         print("\nme>")
-        print(format_generation_result(generate_once(args, encoder, tokenizer, model, initial_prompt)))
+        result = generate_once(args, encoder, tokenizer, model, initial_prompt)
+        print(format_interactive_result(result, args=args, encoder=encoder, tokenizer=tokenizer))
 
     while True:
         try:
@@ -123,7 +160,8 @@ def run_interactive(
             return
 
         print("\nme>")
-        print(format_generation_result(generate_once(args, encoder, tokenizer, model, user_prompt)))
+        result = generate_once(args, encoder, tokenizer, model, user_prompt)
+        print(format_interactive_result(result, args=args, encoder=encoder, tokenizer=tokenizer))
 
 
 def main() -> None:
@@ -140,7 +178,8 @@ def main() -> None:
         run_interactive(args, encoder, tokenizer, model, initial_prompt=args.prompt)
         return
 
-    print(format_generation_result(generate_once(args, encoder, tokenizer, model, args.prompt or "")))
+    result = generate_once(args, encoder, tokenizer, model, args.prompt or "")
+    print(format_interactive_result(result, args=args, encoder=encoder, tokenizer=tokenizer))
 
 
 if __name__ == "__main__":

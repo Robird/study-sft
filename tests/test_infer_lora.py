@@ -15,10 +15,12 @@ from study_sft.inference_runtime import (
     GENERATION_MODE_ENTRY,
     STOP_REASON_EOS_TOKEN,
     STOP_REASON_ENTRY_END,
+    STOP_REASON_MAX_NEW_TOKENS,
     STOP_REASON_PROTOCOL_VIOLATION,
     STOP_REASON_STRUCTURE_TOKEN,
     SingleTurnGenerationResult,
     format_generation_result,
+    format_generation_token_debug,
     generate_single_turn_result,
     parse_single_turn_generation,
     prepare_single_turn_generation,
@@ -398,6 +400,63 @@ class InferLoraTests(unittest.TestCase):
         )
 
         self.assertEqual(rendered, "answer")
+
+    def test_format_generation_token_debug_names_structural_tokens(self) -> None:
+        tokenizer = FakeTokenizer()
+        tokenizer.eos_token_id = 42
+        encoder = AgenticContextEncoder(tokenizer)
+        result = SingleTurnGenerationResult(
+            text="<|quad_start|>SendMessage(<|box_start|>hi<|box_end|>)<|quad_end|>",
+            display_text="<|quad_start|>SendMessage(<|box_start|>hi<|box_end|>)<|quad_end|>",
+            output_ids=[
+                QWEN3_AGENTIC_TOKEN_TABLE.action_start,
+                *tokenizer.encode("SendMessage(", add_special_tokens=False),
+                QWEN3_AGENTIC_TOKEN_TABLE.opaque_payload_start,
+                *tokenizer.encode("hi", add_special_tokens=False),
+                QWEN3_AGENTIC_TOKEN_TABLE.opaque_payload_end,
+                *tokenizer.encode(")", add_special_tokens=False),
+                QWEN3_AGENTIC_TOKEN_TABLE.action_end,
+            ],
+            content_ids=[
+                QWEN3_AGENTIC_TOKEN_TABLE.action_start,
+                *tokenizer.encode("SendMessage(", add_special_tokens=False),
+                QWEN3_AGENTIC_TOKEN_TABLE.opaque_payload_start,
+                *tokenizer.encode("hi", add_special_tokens=False),
+                QWEN3_AGENTIC_TOKEN_TABLE.opaque_payload_end,
+                *tokenizer.encode(")", add_special_tokens=False),
+                QWEN3_AGENTIC_TOKEN_TABLE.action_end,
+            ],
+            stop_reason=STOP_REASON_ENTRY_END,
+            clean_termination=True,
+        )
+
+        rendered = format_generation_token_debug(result, encoder=encoder, tokenizer=tokenizer)
+
+        self.assertIn("structural_hits=opaque_payload_start=151648", rendered)
+        self.assertIn("action_start=151650", rendered)
+        self.assertIn("action_end=151651", rendered)
+        self.assertIn("000 151650 action_start '<|quad_start|>' '' kept", rendered)
+        self.assertIn("opaque_payload_start '<|box_start|>'", rendered)
+
+    def test_format_generation_token_debug_can_truncate_long_sequences(self) -> None:
+        tokenizer = FakeTokenizer()
+        tokenizer.eos_token_id = 42
+        encoder = AgenticContextEncoder(tokenizer)
+        result = SingleTurnGenerationResult(
+            text="abcdef",
+            display_text="abcdef",
+            output_ids=tokenizer.encode("abcdef", add_special_tokens=False),
+            content_ids=tokenizer.encode("abcdef", add_special_tokens=False),
+            stop_reason=STOP_REASON_MAX_NEW_TOKENS,
+            clean_termination=False,
+        )
+
+        rendered = format_generation_token_debug(result, encoder=encoder, tokenizer=tokenizer, max_tokens=3)
+
+        self.assertIn("output_ids=[1097, 1098, 1099, ... truncated 3]", rendered)
+        self.assertIn("... truncated 3 token rows", rendered)
+        self.assertIn("002 1099 - 'c' '' kept", rendered)
+        self.assertNotIn("003 1100", rendered)
 
 
 if __name__ == "__main__":
