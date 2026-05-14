@@ -84,7 +84,7 @@ def _truncate_to_supervised_suffix_start(
         if len(encoded.input_ids) - start <= max_length:
             return start
 
-    raise ValueError("supervised entry suffix exceeds max_length")
+    return None
 
 
 def _slice_encoded_context(encoded: EncodedContext, *, start: int) -> EncodedContext:
@@ -154,7 +154,7 @@ def _truncate_prepared_training_encoding(
     prepared: PreparedTrainingEncoding,
     *,
     max_length: int | None,
-) -> PreparedTrainingEncoding:
+) -> PreparedTrainingEncoding | None:
     if max_length is None:
         return prepared
     start = _truncate_to_supervised_suffix_start(
@@ -162,6 +162,8 @@ def _truncate_prepared_training_encoding(
         prepared.entry_spans,
         max_length=max_length,
     )
+    if start is None:
+        return None
     if start == 0:
         return prepared
     return PreparedTrainingEncoding(
@@ -178,7 +180,7 @@ def encode_training_context(
     max_length: int | None = None,
     validate_encoding: bool = False,
     label_policy: TrainingLabelPolicy = "entry",
-) -> dict[str, list[int]]:
+) -> dict[str, list[int]] | None:
     prepared = _prepare_training_context_encoding(
         context,
         encoder,
@@ -186,6 +188,8 @@ def encode_training_context(
         label_policy=label_policy,
     )
     prepared = _truncate_prepared_training_encoding(prepared, max_length=max_length)
+    if prepared is None:
+        return None
     features = {
         "input_ids": prepared.encoded.input_ids,
         "labels": _labels_from_prepared_training_encoding(prepared, label_policy=label_policy),
@@ -201,7 +205,7 @@ def encode_training_features_from_record(
     encoder: AgenticContextEncoder,
     config: TrainingEncodingConfig,
     validate_encoding: bool = False,
-) -> dict[str, list[int]]:
+) -> dict[str, list[int]] | None:
     context = agentic_context_from_acml_record(record)
     return encode_training_context(
         context,

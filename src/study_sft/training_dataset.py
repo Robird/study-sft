@@ -222,10 +222,13 @@ def encode_training_dataset(
     encoder: AgenticContextEncoder,
     encoding_config: TrainingEncodingConfig,
     validate_encoding: bool = False,
+    logger: logging.Logger | None = None,
 ) -> Dataset:
     _require_acml_column(dataset)
+    _skipped_count = 0
 
     def add_features(batch: dict[str, list[object]]) -> dict[str, list[list[int]]]:
+        nonlocal _skipped_count
         batch_size = len(next(iter(batch.values()), []))
         records = [
             {
@@ -234,23 +237,35 @@ def encode_training_dataset(
             }
             for index in range(batch_size)
         ]
-        encoded_rows = [
-            encode_training_features_from_record(
+        encoded_rows: list[dict[str, list[int]]] = []
+        for record in records:
+            features = encode_training_features_from_record(
                 dict(record),
                 encoder=encoder,
                 config=encoding_config,
                 validate_encoding=validate_encoding,
             )
-            for record in records
-        ]
+            if features is None:
+                _skipped_count += 1
+                continue
+            encoded_rows.append(features)
         return _feature_columns_from_encoded_rows(encoded_rows)
 
-    return dataset.map(
+    before_count = len(dataset)
+    result = dataset.map(
         add_features,
         batched=True,
         remove_columns=list(dataset.column_names),
         desc="encode acml training samples",
     )
+    if _skipped_count and logger is not None:
+        logger.warning(
+            "由于超过 max_length=%d 跳过了 %d 个训练样本（剩余 %d 个）",
+            encoding_config.max_length,
+            _skipped_count,
+            before_count - _skipped_count,
+        )
+    return result
 
 
 def _encode_training_dataset_limited(
@@ -260,12 +275,14 @@ def _encode_training_dataset_limited(
     encoding_config: TrainingEncodingConfig,
     validate_encoding: bool,
     limit_train_samples: int,
+    logger: logging.Logger | None = None,
 ) -> Dataset:
     _require_acml_column(dataset)
     _validate_limit_train_samples(limit_train_samples)
     if limit_train_samples == 0:
         return _empty_encoded_dataset()
     encoded_rows: list[dict[str, list[int]]] = []
+    skipped = 0
     for record in dataset:
         features = encode_training_features_from_record(
             dict(record),
@@ -273,9 +290,19 @@ def _encode_training_dataset_limited(
             config=encoding_config,
             validate_encoding=validate_encoding,
         )
+        if features is None:
+            skipped += 1
+            continue
         encoded_rows.append(features)
         if len(encoded_rows) >= limit_train_samples:
             break
+    if skipped and logger is not None:
+        logger.warning(
+            "由于超过 max_length=%d 跳过了 %d 个训练样本（已收集 %d 个有效样本）",
+            encoding_config.max_length,
+            skipped,
+            len(encoded_rows),
+        )
     return Dataset.from_dict(_feature_columns_from_encoded_rows(encoded_rows))
 
 
@@ -302,6 +329,7 @@ def prepare_training_dataset(
             encoding_config=encoding_config,
             validate_encoding=validate_encoding,
             limit_train_samples=limit_train_samples,
+            logger=logger,
         )
     if options.cache_dir is None:
         return encode_training_dataset(
@@ -309,6 +337,7 @@ def prepare_training_dataset(
             encoder=encoder,
             encoding_config=encoding_config,
             validate_encoding=validate_encoding,
+            logger=logger,
         )
 
     cache_payload = build_training_dataset_cache_identity(
@@ -327,6 +356,7 @@ def prepare_training_dataset(
             encoder=encoder,
             encoding_config=encoding_config,
             validate_encoding=validate_encoding,
+            logger=logger,
         ),
         validate=(
             (lambda cached: validate_cached_training_dataset(cached, encoder))

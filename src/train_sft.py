@@ -89,8 +89,8 @@ class ScriptArguments:
     bf16: bool = True
     fp16: bool = False
 
-    lora_r: int = 32
-    lora_alpha: int = 32
+    lora_r: int = 64
+    lora_alpha: int = 64
     lora_dropout: float = 0.05
     lora_target_modules: Optional[str] = None
     bias: str = "none"

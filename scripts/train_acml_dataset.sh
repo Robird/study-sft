@@ -12,12 +12,13 @@ fi
 
 cd "${repo_root}"
 
-CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-1} python src/train_sft.py \
+torchrun --nproc_per_node=2 src/train_sft.py \
   --dataset_path "${ACML_DATASET_PATH}" \
   --output_dir /mnt/fast/LLM/study-sft/qwen3-1.7b-acml-lora \
+  --overwrite_output_dir \
   --num_train_epochs 1 \
-  --per_device_train_batch_size 2 \
-  --gradient_accumulation_steps 8 \
+  --per_device_train_batch_size 8 \
+  --gradient_accumulation_steps 1 \
   --learning_rate 1e-4 \
   --optim adamw_torch \
   --logging_steps 10 \
