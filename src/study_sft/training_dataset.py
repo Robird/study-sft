@@ -17,7 +17,7 @@ from study_sft.training_cache import TrainingDatasetCacheStore
 from study_sft.training_data import TrainingEncodingConfig, encode_training_features_from_record
 
 
-TRAINING_DATASET_CACHE_VERSION = "agentic-training-dataset-v5"
+TRAINING_DATASET_CACHE_VERSION = "agentic-training-dataset-v7"
 ACML_DATA_PROTOCOL = "acml"
 
 
@@ -117,10 +117,12 @@ def tokenizer_identity_payload(encoder: AgenticContextEncoder) -> dict[str, obje
     tokenizer = encoder.tokenizer
     token_table = encoder.policy.token_table
     probe_texts = (
-        token_table.message_start_text,
-        token_table.message_end_text,
+        token_table.entry_start_text,
+        token_table.entry_end_text,
         token_table.opaque_payload_start_text,
         token_table.opaque_payload_end_text,
+        token_table.action_start_text,
+        token_table.action_end_text,
         *[f"{kind}\n" for kind in encoder.policy.allowed_kinds],
         "\n",
         "agentic-cache-probe",
@@ -165,20 +167,23 @@ def build_training_dataset_cache_identity(
             "dataset_split": locator.dataset_split,
         },
         "max_length": encoding_config.max_length,
-        "label_policy": encoding_config.label_policy,
         "tokenizer": tokenizer_identity_payload(encoder),
         "policy": {
             "allowed_kinds": list(encoder.policy.allowed_kinds),
             "extra_reserved_ids": list(encoder.policy.extra_reserved_ids),
             "token_table": {
-                "message_start": token_table.message_start,
-                "message_end": token_table.message_end,
+                "entry_start": token_table.entry_start,
+                "entry_end": token_table.entry_end,
                 "opaque_payload_start": token_table.opaque_payload_start,
                 "opaque_payload_end": token_table.opaque_payload_end,
-                "message_start_text": token_table.message_start_text,
-                "message_end_text": token_table.message_end_text,
+                "action_start": token_table.action_start,
+                "action_end": token_table.action_end,
+                "entry_start_text": token_table.entry_start_text,
+                "entry_end_text": token_table.entry_end_text,
                 "opaque_payload_start_text": token_table.opaque_payload_start_text,
                 "opaque_payload_end_text": token_table.opaque_payload_end_text,
+                "action_start_text": token_table.action_start_text,
+                "action_end_text": token_table.action_end_text,
             },
         },
     }

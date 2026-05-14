@@ -65,8 +65,8 @@ ACML authoring text
 
 ```acml
 <acml version="0">
-<acml:entry kind="belief">You are a helpful, honest, and concise assistant.</acml:entry>
 <acml:entry kind="observation">Explain what supervised fine-tuning is in one sentence.</acml:entry>
+<acml:entry kind="belief">You are a helpful, honest, and concise assistant.</acml:entry>
 <acml:entry kind="me">Supervised fine-tuning teaches a model from labeled input-output examples.</acml:entry>
 </acml>
 ```
@@ -77,6 +77,7 @@ ACML authoring text
 
 - 一条 ACML document 只表达一个训练样本。
 - 推荐每条样本只有一个主要监督目标；在默认 `all_me` 下，这通常意味着只有一条 `kind="me"` entry。
+- 如果同一条样本里同时出现 `observation` 与 `belief`，当前更推荐按 `observation -> belief -> me` 排列，和推理侧前缀保持一致。
 - `belief` 放稳定规则、身份、运行模式。
 - `observation` 放用户输入、工具结果、材料、文件片段等外部信息。
 - `me` 放模型当前这一步应该产出的内容。

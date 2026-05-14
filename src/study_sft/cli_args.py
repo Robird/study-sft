@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import argparse
 
-from study_sft.inference_prompts import DEFAULT_BELIEF_PROMPT
+from study_sft.inference_prompts import (
+    DEFAULT_BELIEF_PROMPT,
+    DEFAULT_DEVELOPER_NAME,
+    DEFAULT_MESSAGE_SOURCE,
+    DEFAULT_REPLY_TOOL_NAME,
+)
 from study_sft.loaders import DEFAULT_MODEL_NAME_OR_PATH
 
 
@@ -59,4 +64,26 @@ def add_dataset_source_args(parser: argparse.ArgumentParser) -> None:
 
 
 def add_belief_prompt_arg(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--belief_prompt", default=DEFAULT_BELIEF_PROMPT)
+    parser.add_argument(
+        "--belief_prompt",
+        default=DEFAULT_BELIEF_PROMPT,
+        help="追加到 belief entry 中的补充说明文本。",
+    )
+
+
+def add_inference_context_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--developer_name",
+        default=DEFAULT_DEVELOPER_NAME,
+        help="推理时写入 observation/belief 的开发者名称。",
+    )
+    parser.add_argument(
+        "--message_source",
+        default=DEFAULT_MESSAGE_SOURCE,
+        help="推理 observation 中使用的消息来源描述。",
+    )
+    parser.add_argument(
+        "--reply_tool_name",
+        default=DEFAULT_REPLY_TOOL_NAME,
+        help="belief 中注入的对外消息工具原型名称。",
+    )

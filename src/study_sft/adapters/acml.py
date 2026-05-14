@@ -14,10 +14,16 @@ from acml.semantic_model import (
     SemanticText,
     document_to_semantic_context,
 )
-from study_sft.agentic_context_model import AgenticContext, AgenticEntry, AgenticOpaquePayload
+from study_sft.agentic_context_model import (
+    AgenticAction,
+    AgenticContext,
+    AgenticEntry,
+    AgenticOpaquePayload,
+    AgenticText,
+)
 
 
-ActionLoweringPolicy = Literal["render_text", "reject"]
+ActionLoweringPolicy = Literal["preserve", "render_text", "reject"]
 KindLossPolicy = Literal["none", "all_me", "all_entries"]
 ACMLLossPolicy = Literal["explicit"] | KindLossPolicy
 
@@ -33,7 +39,7 @@ def semantic_context_from_acml_text(source: str) -> SemanticContext:
 def agentic_context_from_acml_document(
     document: Document,
     *,
-    action_policy: ActionLoweringPolicy = "render_text",
+    action_policy: ActionLoweringPolicy = "preserve",
     loss_policy: ACMLLossPolicy = "all_me",
 ) -> AgenticContext:
     semantic_context = semantic_context_from_acml_document(document)
@@ -48,7 +54,7 @@ def agentic_context_from_acml_document(
 def agentic_context_from_acml_text(
     source: str,
     *,
-    action_policy: ActionLoweringPolicy = "render_text",
+    action_policy: ActionLoweringPolicy = "preserve",
     loss_policy: ACMLLossPolicy = "all_me",
 ) -> AgenticContext:
     return agentic_context_from_acml_document(
@@ -61,7 +67,7 @@ def agentic_context_from_acml_text(
 def agentic_context_from_acml_record(
     record: dict[str, Any],
     *,
-    action_policy: ActionLoweringPolicy = "render_text",
+    action_policy: ActionLoweringPolicy = "preserve",
     loss_policy: ACMLLossPolicy = "all_me",
 ) -> AgenticContext:
     source = record.get("acml")
@@ -77,7 +83,7 @@ def agentic_context_from_acml_record(
 def agentic_context_from_semantic_context(
     context: SemanticContext,
     *,
-    action_policy: ActionLoweringPolicy = "render_text",
+    action_policy: ActionLoweringPolicy = "preserve",
     loss_policy: KindLossPolicy = "all_me",
 ) -> AgenticContext:
     entry_losses = tuple(_entry_loss_from_kind(entry.kind, loss_policy=loss_policy) for entry in context.entries)
@@ -114,21 +120,28 @@ def _semantic_entry_to_agentic_entry(
     loss: bool,
     action_policy: ActionLoweringPolicy,
 ) -> AgenticEntry:
-    payloads: list[AgenticOpaquePayload] = []
+    content: list[AgenticText | AgenticOpaquePayload | AgenticAction] = []
     for item in entry.content:
         if isinstance(item, SemanticText):
-            payloads.append(AgenticOpaquePayload(text=item.text))
+            content.append(AgenticText(text=item.text))
             continue
         if isinstance(item, SemanticPayload):
-            payloads.append(AgenticOpaquePayload(text=item.text))
+            content.append(AgenticOpaquePayload(text=item.text))
             continue
         if isinstance(item, SemanticAction):
             if action_policy == "reject":
                 raise ValueError("study_sft v0 adapter cannot lower SemanticAction when action_policy='reject'")
-            payloads.append(AgenticOpaquePayload(text=_render_semantic_action(item)))
+            if action_policy == "render_text":
+                content.append(AgenticText(text=_render_semantic_action(item)))
+                continue
+            content.append(
+                AgenticAction(
+                    content=tuple(_semantic_action_item_to_agentic_node(child) for child in item.content),
+                )
+            )
             continue
         raise TypeError(f"unsupported semantic entry content node: {type(item)!r}")
-    return AgenticEntry(kind=entry.kind, content=tuple(payloads), loss=loss)
+    return AgenticEntry(kind=entry.kind, content=tuple(content), loss=loss)
 
 
 def _render_semantic_action(action: SemanticAction) -> str:
@@ -141,6 +154,14 @@ def _render_semantic_action(action: SemanticAction) -> str:
         else:
             raise TypeError(f"unsupported semantic action content node: {type(item)!r}")
     return "".join(pieces)
+
+
+def _semantic_action_item_to_agentic_node(item: SemanticText | SemanticPayload) -> AgenticText | AgenticOpaquePayload:
+    if isinstance(item, SemanticText):
+        return AgenticText(text=item.text)
+    if isinstance(item, SemanticPayload):
+        return AgenticOpaquePayload(text=item.text)
+    raise TypeError(f"unsupported semantic action content node: {type(item)!r}")
 
 
 def _entry_losses_from_document(document: Document, *, loss_policy: ACMLLossPolicy) -> tuple[bool, ...]:

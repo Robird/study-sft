@@ -4,7 +4,7 @@ import unittest
 
 from study_sft.adapters.acml import agentic_context_from_acml_record
 from study_sft.agentic_context import AgenticContextEncoder, EncodedContext, QWEN3_AGENTIC_TOKEN_TABLE
-from study_sft.agentic_context_model import AgenticContext, AgenticEntry, AgenticOpaquePayload
+from study_sft.agentic_context_model import AgenticContext, AgenticEntry, AgenticOpaquePayload, AgenticText
 from study_sft.training_data import TrainingEncodingConfig, encode_training_context, encode_training_features_from_record
 
 
@@ -54,8 +54,8 @@ class TrainingDataTests(unittest.TestCase):
             context,
             AgenticContext(
                 entries=(
-                    AgenticEntry(kind="observation", content=(AgenticOpaquePayload("question"),)),
-                    AgenticEntry(kind="me", loss=True, content=(AgenticOpaquePayload("answer"),)),
+                    AgenticEntry(kind="observation", content=(AgenticText("question"),)),
+                    AgenticEntry(kind="me", loss=True, content=(AgenticText("answer"),)),
                 )
             ),
         )
@@ -71,10 +71,7 @@ class TrainingDataTests(unittest.TestCase):
                 '<acml:entry kind="me" loss="true">answer</acml:entry></acml>'
             },
             encoder=AgenticContextEncoder(FakeTokenizer()),
-            config=TrainingEncodingConfig(
-                max_length=256,
-                label_policy="entry",
-            ),
+            config=TrainingEncodingConfig(max_length=256),
         )
 
         self.assertIn(-100, features["labels"])
@@ -91,28 +88,6 @@ class TrainingDataTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "no supervised labels"):
             encode_training_context(context, AgenticContextEncoder(FakeTokenizer()))
-
-    def test_encode_training_context_payload_only_masks_structure_tokens(self) -> None:
-        context = agentic_context_from_acml_record(
-            {
-                "acml": '<acml version="0"><acml:entry kind="me" loss="true">payload</acml:entry></acml>',
-            }
-        )
-
-        features = encode_training_context(
-            context,
-            AgenticContextEncoder(FakeTokenizer()),
-            label_policy="payload_only",
-        )
-
-        supervised_ids = [
-            token_id
-            for token_id, label in zip(features["input_ids"], features["labels"], strict=True)
-            if label != -100
-        ]
-        self.assertEqual(supervised_ids, [1000 + ord(char) for char in "payload"])
-        self.assertNotIn(QWEN3_AGENTIC_TOKEN_TABLE.message_start, supervised_ids)
-        self.assertNotIn(QWEN3_AGENTIC_TOKEN_TABLE.message_end, supervised_ids)
 
     def test_encode_training_context_truncates_to_supervised_suffix_start(self) -> None:
         encoder = AgenticContextEncoder(FakeTokenizer())
@@ -144,48 +119,8 @@ class TrainingDataTests(unittest.TestCase):
         encoder.validate(encoded)
         entry_spans = encoder.describe_entries(encoded)
         self.assertEqual(len(entry_spans), 1)
-        self.assertEqual(encoded.input_ids[0], QWEN3_AGENTIC_TOKEN_TABLE.message_start)
+        self.assertEqual(encoded.input_ids[0], QWEN3_AGENTIC_TOKEN_TABLE.entry_start)
         self.assertTrue(entry_spans[-1].loss)
-
-    def test_payload_only_labels_survive_truncation_for_acml_context(self) -> None:
-        encoder = AgenticContextEncoder(FakeTokenizer())
-        context = agentic_context_from_acml_record(
-            {
-                "acml": '<acml version="0"><acml:entry kind="observation">Question 1</acml:entry>'
-                '<acml:entry kind="me">Answer 1</acml:entry>'
-                '<acml:entry kind="observation">Question 2</acml:entry>'
-                '<acml:entry kind="me" loss="true">payload</acml:entry></acml>'
-            },
-            loss_policy="explicit",
-        )
-        target_only_context = agentic_context_from_acml_record(
-            {
-                "acml": '<acml version="0"><acml:entry kind="me" loss="true">payload</acml:entry></acml>',
-            },
-            loss_policy="explicit",
-        )
-
-        target_only_length = len(
-            encode_training_context(
-                target_only_context,
-                encoder,
-                label_policy="payload_only",
-            )["input_ids"]
-        )
-        features = encode_training_context(
-            context,
-            encoder,
-            max_length=target_only_length,
-            label_policy="payload_only",
-        )
-
-        supervised_ids = [
-            token_id
-            for token_id, label in zip(features["input_ids"], features["labels"], strict=True)
-            if label != -100
-        ]
-        self.assertEqual(supervised_ids, [1000 + ord(char) for char in "payload"])
-
 
 if __name__ == "__main__":
     unittest.main()

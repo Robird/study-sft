@@ -39,12 +39,8 @@ class ShiftedTextTokenizer(FakeTokenizer):
 def make_encoding_config(
     *,
     max_length: int = 128,
-    label_policy: str = "entry",
 ) -> TrainingEncodingConfig:
-    return TrainingEncodingConfig(
-        max_length=max_length,
-        label_policy=label_policy,
-    )
+    return TrainingEncodingConfig(max_length=max_length)
 
 
 def make_build_options(
@@ -86,8 +82,8 @@ def make_acml_document(
         belief_entry = f'<acml:entry kind="belief">{belief}</acml:entry>'
     return (
         '<acml version="0">'
-        f"{belief_entry}"
         f'<acml:entry kind="observation">{observation}</acml:entry>'
+        f"{belief_entry}"
         f'<acml:entry kind="me" loss="true">{answer}</acml:entry>'
         "</acml>"
     )
@@ -322,7 +318,7 @@ class TrainingRuntimeTests(unittest.TestCase):
     def test_validate_cached_training_dataset_rejects_mismatched_label_lengths(self) -> None:
         cached_dataset = Dataset.from_dict(
             {
-                "input_ids": [[QWEN3_AGENTIC_TOKEN_TABLE.message_start]],
+                "input_ids": [[QWEN3_AGENTIC_TOKEN_TABLE.entry_start]],
                 "labels": [[]],
             }
         )
@@ -356,29 +352,6 @@ class TrainingRuntimeTests(unittest.TestCase):
         self.assertEqual(len(cache_dir_entries), 1)
         self.assertEqual(len(updated_cache_dir_entries), 2)
 
-    def test_cache_key_changes_when_label_policy_changes(self) -> None:
-        dataset = make_acml_dataset(make_acml_document())
-        encoder = AgenticContextEncoder(FakeTokenizer())
-
-        entry_key = training_dataset_cache_key(
-            build_training_dataset_cache_identity(
-                dataset,
-                encoder=encoder,
-                encoding_config=make_encoding_config(label_policy="entry"),
-                dataset_locator=make_dataset_locator(dataset_name="unit-test"),
-            )
-        )
-        payload_key = training_dataset_cache_key(
-            build_training_dataset_cache_identity(
-                dataset,
-                encoder=encoder,
-                encoding_config=make_encoding_config(label_policy="payload_only"),
-                dataset_locator=make_dataset_locator(dataset_name="unit-test"),
-            )
-        )
-
-        self.assertNotEqual(entry_key, payload_key)
-
     def test_build_training_dataset_cache_identity_records_acml_protocol(self) -> None:
         cache_identity = build_training_dataset_cache_identity(
             make_acml_dataset(make_acml_document()),
@@ -390,6 +363,14 @@ class TrainingRuntimeTests(unittest.TestCase):
         self.assertEqual(cache_identity["data_protocol"], "acml")
         self.assertNotIn("dataset_format", cache_identity)
         self.assertNotIn("belief_prompt", cache_identity)
+        self.assertIn("action_start", cache_identity["policy"]["token_table"])
+        self.assertIn("action_end", cache_identity["policy"]["token_table"])
+
+    def test_tokenizer_identity_payload_records_action_tokens(self) -> None:
+        identity = tokenizer_identity_payload(AgenticContextEncoder(FakeTokenizer()))
+
+        self.assertIn(QWEN3_AGENTIC_TOKEN_TABLE.action_start_text, identity["probe_encodings"])
+        self.assertIn(QWEN3_AGENTIC_TOKEN_TABLE.action_end_text, identity["probe_encodings"])
 
     def test_prepare_training_dataset_ignores_incomplete_cache_dir(self) -> None:
         dataset = make_acml_dataset(make_acml_document())
@@ -451,7 +432,7 @@ class TrainingRuntimeTests(unittest.TestCase):
             )
 
     def test_agentic_data_collator_pads_features_consistently(self) -> None:
-        collator = AgenticDataCollator(pad_token_id=QWEN3_AGENTIC_TOKEN_TABLE.message_end)
+        collator = AgenticDataCollator(pad_token_id=QWEN3_AGENTIC_TOKEN_TABLE.entry_end)
         batch = collator(
             [
                 {"input_ids": [1, 2], "labels": [-100, 2]},
@@ -459,7 +440,7 @@ class TrainingRuntimeTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(batch["input_ids"].tolist(), [[1, 2], [3, QWEN3_AGENTIC_TOKEN_TABLE.message_end]])
+        self.assertEqual(batch["input_ids"].tolist(), [[1, 2], [3, QWEN3_AGENTIC_TOKEN_TABLE.entry_end]])
         self.assertEqual(batch["attention_mask"].tolist(), [[1, 1], [1, 0]])
         self.assertEqual(batch["labels"].tolist(), [[-100, 2], [3, -100]])
 

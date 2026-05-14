@@ -2,9 +2,9 @@
 
 The v0 protocol intentionally stays small:
 
-- entries carry a kind, optional entry-level loss, and a sequence of opaque payload items
-- payload items are the only content leaf in the core schema
-- generation opens a new entry and optionally the first payload slot explicitly
+- entries carry a kind, optional entry-level loss, and mixed text / payload / action content
+- payload maps to box tokens and action maps to quad tokens
+- generation can open a new entry and let the model continue its content
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
 
-from study_sft.agentic_context_model import AgenticContext, AgenticEntry
+from study_sft.agentic_context_model import AgenticAction, AgenticContext, AgenticEntry, AgenticOpaquePayload, AgenticText
 
 
 __all__ = [
@@ -33,14 +33,17 @@ __all__ = [
 
 ENCODING_VERSION = "agentic-context-v0"
 
-STRUCTURE_MESSAGE_START = "message_start"
-STRUCTURE_MESSAGE_END = "message_end"
+STRUCTURE_ENTRY_START = "entry_start"
+STRUCTURE_ENTRY_END = "entry_end"
 STRUCTURE_OPAQUE_PAYLOAD_START = "opaque_payload_start"
 STRUCTURE_OPAQUE_PAYLOAD_END = "opaque_payload_end"
+STRUCTURE_ACTION_START = "action_start"
+STRUCTURE_ACTION_END = "action_end"
 
 SPAN_KIND_STRUCTURE = "structure"
 SPAN_KIND_KIND = "kind"
 SPAN_KIND_NEWLINE = "newline"
+SPAN_KIND_TEXT = "text"
 SPAN_KIND_OPAQUE_PAYLOAD = "opaque_payload"
 
 
@@ -50,15 +53,19 @@ class _TokenizerLike(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class AgenticTokenTable:
-    message_start: int = 151644
-    message_end: int = 151645
+    entry_start: int = 151644
+    entry_end: int = 151645
     opaque_payload_start: int = 151648
     opaque_payload_end: int = 151649
+    action_start: int = 151650
+    action_end: int = 151651
 
-    message_start_text: str = "<|im_start|>"
-    message_end_text: str = "<|im_end|>"
+    entry_start_text: str = "<|im_start|>"
+    entry_end_text: str = "<|im_end|>"
     opaque_payload_start_text: str = "<|box_start|>"
     opaque_payload_end_text: str = "<|box_end|>"
+    action_start_text: str = "<|quad_start|>"
+    action_end_text: str = "<|quad_end|>"
 
     _id_by_name: dict[str, int] = field(init=False, repr=False, compare=False)
     _name_by_id: dict[int, str] = field(init=False, repr=False, compare=False)
@@ -67,16 +74,20 @@ class AgenticTokenTable:
 
     def __post_init__(self) -> None:
         id_by_name = {
-            STRUCTURE_MESSAGE_START: self.message_start,
-            STRUCTURE_MESSAGE_END: self.message_end,
+            STRUCTURE_ENTRY_START: self.entry_start,
+            STRUCTURE_ENTRY_END: self.entry_end,
             STRUCTURE_OPAQUE_PAYLOAD_START: self.opaque_payload_start,
             STRUCTURE_OPAQUE_PAYLOAD_END: self.opaque_payload_end,
+            STRUCTURE_ACTION_START: self.action_start,
+            STRUCTURE_ACTION_END: self.action_end,
         }
         text_by_name = {
-            STRUCTURE_MESSAGE_START: self.message_start_text,
-            STRUCTURE_MESSAGE_END: self.message_end_text,
+            STRUCTURE_ENTRY_START: self.entry_start_text,
+            STRUCTURE_ENTRY_END: self.entry_end_text,
             STRUCTURE_OPAQUE_PAYLOAD_START: self.opaque_payload_start_text,
             STRUCTURE_OPAQUE_PAYLOAD_END: self.opaque_payload_end_text,
+            STRUCTURE_ACTION_START: self.action_start_text,
+            STRUCTURE_ACTION_END: self.action_end_text,
         }
         object.__setattr__(self, "_id_by_name", id_by_name)
         object.__setattr__(self, "_name_by_id", {token_id: name for name, token_id in id_by_name.items()})
@@ -202,7 +213,26 @@ class EncodedContextArtifacts:
 class _NormalizedEntry:
     kind: str
     loss: bool
-    content: tuple[str, ...]
+    content: tuple["_NormalizedContent", ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _NormalizedText:
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class _NormalizedOpaquePayload:
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class _NormalizedAction:
+    content: tuple["_NormalizedInlineContent", ...]
+
+
+_NormalizedInlineContent = _NormalizedText | _NormalizedOpaquePayload
+_NormalizedContent = _NormalizedText | _NormalizedOpaquePayload | _NormalizedAction
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,8 +304,30 @@ def _normalize_typed_entry(
     return _NormalizedEntry(
         kind=kind,
         loss=entry.loss,
-        content=tuple(item.text for item in entry.content),
+        content=tuple(_normalize_typed_content_item(item) for item in entry.content),
     )
+
+
+def _normalize_typed_content_item(
+    item: AgenticText | AgenticOpaquePayload | AgenticAction,
+) -> _NormalizedContent:
+    if isinstance(item, AgenticText):
+        return _NormalizedText(text=item.text)
+    if isinstance(item, AgenticOpaquePayload):
+        return _NormalizedOpaquePayload(text=item.text)
+    if isinstance(item, AgenticAction):
+        return _NormalizedAction(
+            content=tuple(_normalize_typed_action_item(child) for child in item.content),
+        )
+    raise TypeError(f"unsupported agentic content item: {type(item)!r}")
+
+
+def _normalize_typed_action_item(item: AgenticText | AgenticOpaquePayload) -> _NormalizedInlineContent:
+    if isinstance(item, AgenticText):
+        return _NormalizedText(text=item.text)
+    if isinstance(item, AgenticOpaquePayload):
+        return _NormalizedOpaquePayload(text=item.text)
+    raise TypeError(f"unsupported agentic action content item: {type(item)!r}")
 
 
 def _validate_kind(kind_value: Any, policy: AgenticContextPolicy) -> str:
@@ -308,6 +360,13 @@ class AgenticContextEncoder:
         if _contains_reserved_id(escaped_ids, self.reserved_ids):
             raise ValueError("escaped untrusted text still produced reserved token ids")
         return EncodedText(input_ids=escaped_ids, encoding="text-escaped", text=escaped_text)
+
+    def encode_text(self, text: Any) -> EncodedText:
+        raw_text = "" if text is None else str(text)
+        input_ids = self.tokenizer.encode(raw_text, add_special_tokens=False)
+        if _contains_reserved_id(input_ids, self.reserved_ids):
+            raise ValueError("trusted text produced reserved token ids; use structural nodes instead")
+        return EncodedText(input_ids=input_ids, encoding="text-checked", text=raw_text)
 
     def encode_context(
         self,
@@ -361,17 +420,13 @@ class AgenticContextEncoder:
             self.validate_debug(debug_encoded)
         return debug_encoded
 
-    def encode_generation_payload_prefix(
+    def encode_generation_entry_prefix(
         self,
         context: AgenticContext,
         *,
         next_kind: str = "me",
     ) -> list[int]:
-        layout = self._layout_or_build()
-        return [
-            *self._encode_generation_entry_prefix(context, next_kind=next_kind),
-            layout.structure_ids[STRUCTURE_OPAQUE_PAYLOAD_START],
-        ]
+        return self._encode_generation_entry_prefix(context, next_kind=next_kind)
 
     def validate(self, encoded: EncodedContext) -> None:
         _walk_encoded_spans(encoded, self.policy, self._layout_or_build())
@@ -429,7 +484,7 @@ class AgenticContextEncoder:
         layout = self._layout_or_build()
         return [
             *encoded.input_ids,
-            layout.structure_ids[STRUCTURE_MESSAGE_START],
+            layout.structure_ids[STRUCTURE_ENTRY_START],
             *layout.kind_prefix_ids[kind],
         ]
 
@@ -485,16 +540,16 @@ class _ContextBuilder:
 
     def serialize_entry(self, entry: _NormalizedEntry) -> None:
         start = len(self.input_ids)
-        self._append_structure(STRUCTURE_MESSAGE_START, entry_kind=entry.kind, loss=entry.loss)
+        self._append_structure(STRUCTURE_ENTRY_START, entry_kind=entry.kind, loss=entry.loss)
         self._append_ids(
             self.layout.kind_prefix_ids[entry.kind],
             entry_kind=entry.kind,
             loss=entry.loss,
             span_kind=SPAN_KIND_KIND,
         )
-        for payload_text in entry.content:
-            self._serialize_payload(payload_text, entry_kind=entry.kind, loss=entry.loss)
-        self._append_structure(STRUCTURE_MESSAGE_END, entry_kind=entry.kind, loss=entry.loss)
+        for item in entry.content:
+            self._serialize_content_item(item, entry_kind=entry.kind, loss=entry.loss)
+        self._append_structure(STRUCTURE_ENTRY_END, entry_kind=entry.kind, loss=entry.loss)
         self._append_ids(
             self.layout.newline_ids,
             entry_kind=entry.kind,
@@ -503,6 +558,42 @@ class _ContextBuilder:
         )
         if self.collect_entry_spans:
             self.entry_spans.append(EntrySpan(start=start, end=len(self.input_ids), kind=entry.kind, loss=entry.loss))
+
+    def _serialize_content_item(self, item: _NormalizedContent, *, entry_kind: str, loss: bool) -> None:
+        if isinstance(item, _NormalizedText):
+            encoded = self.encoder.encode_text(item.text)
+            self._append_ids(
+                encoded.input_ids,
+                entry_kind=entry_kind,
+                loss=loss,
+                span_kind=SPAN_KIND_TEXT,
+            )
+            return
+        if isinstance(item, _NormalizedOpaquePayload):
+            self._serialize_payload(item.text, entry_kind=entry_kind, loss=loss)
+            return
+        if isinstance(item, _NormalizedAction):
+            self._serialize_action(item, entry_kind=entry_kind, loss=loss)
+            return
+        raise TypeError(f"unsupported normalized content item: {type(item)!r}")
+
+    def _serialize_action(self, action: _NormalizedAction, *, entry_kind: str, loss: bool) -> None:
+        self._append_structure(STRUCTURE_ACTION_START, entry_kind=entry_kind, loss=loss)
+        for item in action.content:
+            if isinstance(item, _NormalizedText):
+                encoded = self.encoder.encode_text(item.text)
+                self._append_ids(
+                    encoded.input_ids,
+                    entry_kind=entry_kind,
+                    loss=loss,
+                    span_kind=SPAN_KIND_TEXT,
+                )
+                continue
+            if isinstance(item, _NormalizedOpaquePayload):
+                self._serialize_payload(item.text, entry_kind=entry_kind, loss=loss)
+                continue
+            raise TypeError(f"unsupported normalized action content item: {type(item)!r}")
+        self._append_structure(STRUCTURE_ACTION_END, entry_kind=entry_kind, loss=loss)
 
     def _serialize_payload(self, payload_text: str, *, entry_kind: str, loss: bool) -> None:
         self._append_structure(STRUCTURE_OPAQUE_PAYLOAD_START, entry_kind=entry_kind, loss=loss)
@@ -587,8 +678,8 @@ def _walk_encoded_spans(
     reserved_ids = policy.reserved_ids()
     position = 0
     while position < len(encoded.input_ids):
-        if encoded.input_ids[position] != layout.structure_ids[STRUCTURE_MESSAGE_START]:
-            raise ValueError(f"expected message_start at position {position}")
+        if encoded.input_ids[position] != layout.structure_ids[STRUCTURE_ENTRY_START]:
+            raise ValueError(f"expected entry_start at position {position}")
         entry_start = position
         entry_loss = encoded.loss_mask[position]
         position += 1
@@ -604,45 +695,164 @@ def _walk_encoded_spans(
                 position = end
                 break
         if matched_kind is None:
-            raise ValueError(f"message_start at position {entry_start} is not followed by a valid kind prefix")
+            raise ValueError(f"entry_start at position {entry_start} is not followed by a valid kind prefix")
 
-        while True:
-            if position >= len(encoded.input_ids):
-                raise ValueError("entry is not closed before end of sequence")
-            token_id = encoded.input_ids[position]
-            if encoded.loss_mask[position] != entry_loss:
-                raise ValueError("loss_mask must be constant within an entry")
-            if token_id == layout.structure_ids[STRUCTURE_OPAQUE_PAYLOAD_START]:
-                spans.append(Span(start=position, end=position + 1, entry_kind=matched_kind, kind=SPAN_KIND_STRUCTURE))
-                position += 1
-                payload_start = position
-                while position < len(encoded.input_ids) and encoded.input_ids[position] not in reserved_ids:
-                    if encoded.loss_mask[position] != entry_loss:
-                        raise ValueError("loss_mask must be constant within an entry")
-                    position += 1
-                if position >= len(encoded.input_ids):
-                    raise ValueError("opaque_payload is not closed before end of sequence")
-                spans.append(
-                    Span(start=payload_start, end=position, entry_kind=matched_kind, kind=SPAN_KIND_OPAQUE_PAYLOAD)
-                )
-                if encoded.input_ids[position] != layout.structure_ids[STRUCTURE_OPAQUE_PAYLOAD_END]:
-                    raise ValueError(f"opaque_payload contains an unexpected reserved token at position {position}")
-                spans.append(Span(start=position, end=position + 1, entry_kind=matched_kind, kind=SPAN_KIND_STRUCTURE))
-                position += 1
-                continue
-            if token_id == layout.structure_ids[STRUCTURE_MESSAGE_END]:
-                spans.append(Span(start=position, end=position + 1, entry_kind=matched_kind, kind=SPAN_KIND_STRUCTURE))
-                position += 1
-                newline_end = position + len(layout.newline_ids)
-                if encoded.input_ids[position:newline_end] != layout.newline_ids:
-                    raise ValueError(f"message_end at position {position - 1} is not followed by the trailing newline")
-                if any(mask != entry_loss for mask in encoded.loss_mask[position:newline_end]):
-                    raise ValueError("loss_mask must be constant across the trailing entry newline")
-                spans.append(Span(start=position, end=newline_end, entry_kind=matched_kind, kind=SPAN_KIND_NEWLINE))
-                position = newline_end
-                break
-            raise ValueError(f"entry content must be opaque_payload blocks, found reserved token at position {position}")
+        position = _walk_encoded_entry_content(
+            encoded,
+            spans,
+            layout,
+            reserved_ids=reserved_ids,
+            entry_kind=matched_kind,
+            entry_loss=entry_loss,
+            position=position,
+        )
     return tuple(spans)
+
+
+def _walk_encoded_entry_content(
+    encoded: EncodedContext,
+    spans: list[Span],
+    layout: _ContextLayout,
+    *,
+    reserved_ids: frozenset[int],
+    entry_kind: str,
+    entry_loss: int,
+    position: int,
+) -> int:
+    while True:
+        if position >= len(encoded.input_ids):
+            raise ValueError("entry is not closed before end of sequence")
+        token_id = encoded.input_ids[position]
+        if encoded.loss_mask[position] != entry_loss:
+            raise ValueError("loss_mask must be constant within an entry")
+        if token_id == layout.structure_ids[STRUCTURE_ENTRY_END]:
+            spans.append(Span(start=position, end=position + 1, entry_kind=entry_kind, kind=SPAN_KIND_STRUCTURE))
+            position += 1
+            newline_end = position + len(layout.newline_ids)
+            if encoded.input_ids[position:newline_end] != layout.newline_ids:
+                raise ValueError(f"entry_end at position {position - 1} is not followed by the trailing newline")
+            if any(mask != entry_loss for mask in encoded.loss_mask[position:newline_end]):
+                raise ValueError("loss_mask must be constant across the trailing entry newline")
+            spans.append(Span(start=position, end=newline_end, entry_kind=entry_kind, kind=SPAN_KIND_NEWLINE))
+            return newline_end
+        if token_id == layout.structure_ids[STRUCTURE_OPAQUE_PAYLOAD_START]:
+            position = _walk_encoded_payload(
+                encoded,
+                spans,
+                layout,
+                entry_kind=entry_kind,
+                entry_loss=entry_loss,
+                position=position,
+            )
+            continue
+        if token_id == layout.structure_ids[STRUCTURE_ACTION_START]:
+            position = _walk_encoded_action(
+                encoded,
+                spans,
+                layout,
+                reserved_ids=reserved_ids,
+                entry_kind=entry_kind,
+                entry_loss=entry_loss,
+                position=position,
+            )
+            continue
+        if token_id in reserved_ids:
+            raise ValueError(f"entry content contains an unexpected reserved token at position {position}")
+        position = _walk_encoded_text(
+            encoded,
+            spans,
+            reserved_ids=reserved_ids,
+            entry_kind=entry_kind,
+            entry_loss=entry_loss,
+            position=position,
+        )
+
+
+def _walk_encoded_action(
+    encoded: EncodedContext,
+    spans: list[Span],
+    layout: _ContextLayout,
+    *,
+    reserved_ids: frozenset[int],
+    entry_kind: str,
+    entry_loss: int,
+    position: int,
+) -> int:
+    spans.append(Span(start=position, end=position + 1, entry_kind=entry_kind, kind=SPAN_KIND_STRUCTURE))
+    position += 1
+    while True:
+        if position >= len(encoded.input_ids):
+            raise ValueError("action is not closed before end of sequence")
+        token_id = encoded.input_ids[position]
+        if encoded.loss_mask[position] != entry_loss:
+            raise ValueError("loss_mask must be constant within an action")
+        if token_id == layout.structure_ids[STRUCTURE_ACTION_END]:
+            spans.append(Span(start=position, end=position + 1, entry_kind=entry_kind, kind=SPAN_KIND_STRUCTURE))
+            return position + 1
+        if token_id == layout.structure_ids[STRUCTURE_OPAQUE_PAYLOAD_START]:
+            position = _walk_encoded_payload(
+                encoded,
+                spans,
+                layout,
+                entry_kind=entry_kind,
+                entry_loss=entry_loss,
+                position=position,
+            )
+            continue
+        if token_id in reserved_ids:
+            raise ValueError(f"action content contains an unexpected reserved token at position {position}")
+        position = _walk_encoded_text(
+            encoded,
+            spans,
+            reserved_ids=reserved_ids,
+            entry_kind=entry_kind,
+            entry_loss=entry_loss,
+            position=position,
+        )
+
+
+def _walk_encoded_payload(
+    encoded: EncodedContext,
+    spans: list[Span],
+    layout: _ContextLayout,
+    *,
+    entry_kind: str,
+    entry_loss: int,
+    position: int,
+) -> int:
+    spans.append(Span(start=position, end=position + 1, entry_kind=entry_kind, kind=SPAN_KIND_STRUCTURE))
+    position += 1
+    payload_start = position
+    reserved_ids = frozenset(layout.id_to_structure_name)
+    while position < len(encoded.input_ids) and encoded.input_ids[position] not in reserved_ids:
+        if encoded.loss_mask[position] != entry_loss:
+            raise ValueError("loss_mask must be constant within opaque_payload")
+        position += 1
+    if position >= len(encoded.input_ids):
+        raise ValueError("opaque_payload is not closed before end of sequence")
+    spans.append(Span(start=payload_start, end=position, entry_kind=entry_kind, kind=SPAN_KIND_OPAQUE_PAYLOAD))
+    if encoded.input_ids[position] != layout.structure_ids[STRUCTURE_OPAQUE_PAYLOAD_END]:
+        raise ValueError(f"opaque_payload contains an unexpected reserved token at position {position}")
+    spans.append(Span(start=position, end=position + 1, entry_kind=entry_kind, kind=SPAN_KIND_STRUCTURE))
+    return position + 1
+
+
+def _walk_encoded_text(
+    encoded: EncodedContext,
+    spans: list[Span],
+    *,
+    reserved_ids: frozenset[int],
+    entry_kind: str,
+    entry_loss: int,
+    position: int,
+) -> int:
+    start = position
+    while position < len(encoded.input_ids) and encoded.input_ids[position] not in reserved_ids:
+        if encoded.loss_mask[position] != entry_loss:
+            raise ValueError("loss_mask must be constant within text spans")
+        position += 1
+    spans.append(Span(start=start, end=position, entry_kind=entry_kind, kind=SPAN_KIND_TEXT))
+    return position
 
 
 def _walk_encoded_entries(
@@ -704,6 +914,7 @@ def _validate_debug_context_spans(
         SPAN_KIND_STRUCTURE,
         SPAN_KIND_KIND,
         SPAN_KIND_NEWLINE,
+        SPAN_KIND_TEXT,
         SPAN_KIND_OPAQUE_PAYLOAD,
     }
     for span in spans:

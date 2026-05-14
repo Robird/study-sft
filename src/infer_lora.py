@@ -4,9 +4,17 @@ from __future__ import annotations
 
 import argparse
 
-from study_sft.cli_args import add_belief_prompt_arg, add_model_source_args, add_optional_bool_arg
+from study_sft.cli_args import (
+    add_belief_prompt_arg,
+    add_inference_context_args,
+    add_model_source_args,
+    add_optional_bool_arg,
+)
 from study_sft.agentic_context import AgenticContextEncoder
+from study_sft.inference_prompts import InferencePromptConfig
 from study_sft.inference_runtime import (
+    GENERATION_MODE_CONTENT,
+    GENERATION_MODE_ENTRY,
     SingleTurnGenerationResult,
     format_generation_result,
     generate_single_turn_result,
@@ -28,7 +36,17 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="进入交互式单轮推理；默认在未提供 --prompt 时自动开启",
     )
+    add_inference_context_args(parser)
     add_belief_prompt_arg(parser)
+    parser.add_argument(
+        "--generation_mode",
+        choices=["content", "entry"],
+        default=GENERATION_MODE_CONTENT,
+        help=(
+            "`content` 不预插 payload 起始，允许模型直接续写 reasoning / 字面量 <acml:action>；"
+            "`entry` 让模型从完整 me entry 起点开始写。"
+        ),
+    )
     parser.add_argument("--max_new_tokens", type=int, default=256)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top_p", type=float, default=0.9)
@@ -40,6 +58,15 @@ def parse_args() -> argparse.Namespace:
     if not args.interactive and not args.prompt:
         parser.error("--interactive false 时必须提供 --prompt")
     return args
+
+
+def build_inference_prompt_config(args: argparse.Namespace) -> InferencePromptConfig:
+    return InferencePromptConfig(
+        belief_prompt=args.belief_prompt,
+        developer_name=args.developer_name,
+        message_source=args.message_source,
+        reply_tool_name=args.reply_tool_name,
+    )
 
 
 def generate_once(
@@ -54,7 +81,8 @@ def generate_once(
         encoder=encoder,
         tokenizer=tokenizer,
         model=model,
-        belief_prompt=args.belief_prompt,
+        prompt_config=build_inference_prompt_config(args),
+        generation_mode=args.generation_mode,
         max_new_tokens=args.max_new_tokens,
         temperature=args.temperature,
         top_p=args.top_p,
@@ -69,7 +97,9 @@ def run_interactive(
     initial_prompt: str | None = None,
 ) -> None:
     print(
-        f"进入交互式单轮推理：kind=me, temperature={args.temperature}, top_p={args.top_p}"
+        "进入交互式单轮推理："
+        f"kind=me, generation_mode={args.generation_mode}, developer={args.developer_name}, tool={args.reply_tool_name}, "
+        f"temperature={args.temperature}, top_p={args.top_p}"
     )
     print("每次输入都会独立推理，不保留历史。输入 exit、quit 或 :q 退出。")
 

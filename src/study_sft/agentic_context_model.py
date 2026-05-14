@@ -10,6 +10,21 @@ AgenticKind = Literal["belief", "observation", "me"]
 
 
 @dataclass(frozen=True, slots=True)
+class AgenticText:
+    text: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.text, str):
+            raise ValueError("AgenticText.text must be a string")
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "kind": "text",
+            "text": self.text,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class AgenticOpaquePayload:
     text: str
 
@@ -25,9 +40,29 @@ class AgenticOpaquePayload:
 
 
 @dataclass(frozen=True, slots=True)
+class AgenticAction:
+    content: tuple[AgenticText | AgenticOpaquePayload, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.content, (tuple, list)):
+            raise ValueError("AgenticAction.content must be a sequence")
+        content = tuple(self.content)
+        for item in content:
+            if not isinstance(item, (AgenticText, AgenticOpaquePayload)):
+                raise ValueError("AgenticAction.content items must be AgenticText or AgenticOpaquePayload values")
+        object.__setattr__(self, "content", content)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": "action",
+            "content": [item.to_dict() for item in self.content],
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class AgenticEntry:
     kind: AgenticKind
-    content: tuple[AgenticOpaquePayload, ...]
+    content: tuple[AgenticText | AgenticOpaquePayload | AgenticAction, ...]
     loss: bool = False
 
     def __post_init__(self) -> None:
@@ -39,8 +74,10 @@ class AgenticEntry:
             raise ValueError("AgenticEntry.content must be a sequence")
         content = tuple(self.content)
         for item in content:
-            if not isinstance(item, AgenticOpaquePayload):
-                raise ValueError("AgenticEntry.content items must be AgenticOpaquePayload values")
+            if not isinstance(item, (AgenticText, AgenticOpaquePayload, AgenticAction)):
+                raise ValueError(
+                    "AgenticEntry.content items must be AgenticText, AgenticOpaquePayload, or AgenticAction values"
+                )
         object.__setattr__(self, "content", content)
 
     def to_dict(self) -> dict[str, Any]:

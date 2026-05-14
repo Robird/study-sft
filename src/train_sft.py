@@ -27,7 +27,7 @@ from study_sft.loaders import (
     load_base_tokenizer,
     load_dataset_source,
 )
-from study_sft.training_data import TrainingEncodingConfig, TrainingLabelPolicy
+from study_sft.training_data import TrainingEncodingConfig
 from study_sft.training_dataset import (
     DatasetLocator,
     TrainingDatasetBuildOptions,
@@ -67,8 +67,6 @@ class ScriptArguments:
     dataset_split: str = "train"
     limit_train_samples: Optional[int] = None
     bloom_level_sampling_weights: Optional[str] = None
-    label_policy: TrainingLabelPolicy = "entry"
-
     output_dir: str = "/mnt/fast/LLM/study-sft/qwen3-1.7b-agentic-lora"
     overwrite_output_dir: bool = False
     seed: int = 42
@@ -119,8 +117,6 @@ def parse_args() -> ScriptArguments:
             "未列出的 level 默认权重为 1；0 表示在该轮训练中排除。"
         ),
     )
-    parser.add_argument("--label_policy", choices=["entry", "payload_only"], default=defaults.label_policy)
-
     parser.add_argument("--output_dir", default=defaults.output_dir)
     parser.add_argument("--overwrite_output_dir", action="store_true")
     parser.add_argument("--seed", type=int, default=defaults.seed)
@@ -334,7 +330,6 @@ def build_train_dataset(
         encoder=encoder,
         encoding_config=TrainingEncodingConfig(
             max_length=args.max_length,
-            label_policy=args.label_policy,
         ),
         build_options=build_options,
         dataset_locator=dataset_locator,

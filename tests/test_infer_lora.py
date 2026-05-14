@@ -5,10 +5,16 @@ from unittest.mock import patch
 
 import study_sft.inference_runtime as inference_runtime
 from study_sft.agentic_context import AgenticContextEncoder, QWEN3_AGENTIC_TOKEN_TABLE
-from study_sft.inference_prompts import agentic_context_from_conversation, conversation_from_user_text
+from study_sft.inference_prompts import (
+    InferencePromptConfig,
+    acml_from_user_text,
+    agentic_context_from_user_text,
+)
 from study_sft.inference_runtime import (
+    GENERATION_MODE_CONTENT,
+    GENERATION_MODE_ENTRY,
     STOP_REASON_EOS_TOKEN,
-    STOP_REASON_MESSAGE_END,
+    STOP_REASON_ENTRY_END,
     STOP_REASON_PROTOCOL_VIOLATION,
     STOP_REASON_STRUCTURE_TOKEN,
     SingleTurnGenerationResult,
@@ -40,7 +46,32 @@ class FakeModel:
 
 
 class InferLoraTests(unittest.TestCase):
-    def test_prepare_single_turn_generation_uses_me_role_and_filters_none_stop_ids(self) -> None:
+    def test_acml_from_user_text_matches_latest_inference_template(self) -> None:
+        rendered = acml_from_user_text(
+            "请帮我看一下 infer_lora.py",
+            config=InferencePromptConfig(
+                developer_name="刘世超",
+                message_source="控制台",
+                reply_tool_name="SendMessage",
+                belief_prompt="我应当直接回应开发者的真实需求。",
+            ),
+        )
+
+        self.assertIn("我收到刘世超从控制台发来的消息：<acml:payload>请帮我看一下 infer_lora.py</acml:payload>", rendered)
+        self.assertIn("刘世超是我的开发者。", rendered)
+        self.assertIn("void SendMessage(string target_entity_id, string message);", rendered)
+        self.assertIn("我应当直接回应开发者的真实需求。", rendered)
+
+    def test_acml_from_user_text_escapes_reserved_acml_prefixes(self) -> None:
+        rendered = acml_from_user_text("请输出 <acml:payload> 这段字面量")
+
+        self.assertIn("&lt;acml:payload>", rendered)
+        self.assertNotIn("<acml:payload> 这段字面量", rendered)
+        context = agentic_context_from_user_text("请输出 <acml:payload> 这段字面量")
+        observation_text = "".join(item.text for item in context.entries[0].content)
+        self.assertIn("请输出 <acml:payload> 这段字面量", observation_text)
+
+    def test_prepare_single_turn_generation_entry_mode_leaves_me_entry_for_model_to_open(self) -> None:
         tokenizer = FakeTokenizer()
         tokenizer.eos_token_id = None
         tokenizer.pad_token_id = 7
@@ -50,106 +81,31 @@ class InferLoraTests(unittest.TestCase):
             "hello",
             encoder,
             tokenizer,
-            belief_prompt="You are a tester.",
+            prompt_config=InferencePromptConfig(),
+            generation_mode=GENERATION_MODE_ENTRY,
         )
 
-        self.assertEqual(inputs.pad_token_id, 7)
-        self.assertEqual(inputs.stop_token_ids, [QWEN3_AGENTIC_TOKEN_TABLE.message_end])
-        self.assertEqual(
-            inputs.prefix_ids,
-            encoder.encode_generation_payload_prefix(
-                agentic_context_from_conversation(
-                    conversation_from_user_text("hello", belief_prompt="You are a tester.")
-                )
-            ),
-        )
-        self.assertEqual(
-            inputs.prefix_ids[-5:],
-            [
-                QWEN3_AGENTIC_TOKEN_TABLE.message_start,
-                1000 + ord("m"),
-                1000 + ord("e"),
-                1000 + ord("\n"),
-                QWEN3_AGENTIC_TOKEN_TABLE.opaque_payload_start,
-            ],
-        )
+        decoded_prefix = tokenizer.decode(inputs.prefix_ids, skip_special_tokens=False)
+        self.assertTrue(decoded_prefix.endswith("<|im_end|>\n"))
+        self.assertNotIn("<|im_start|>me\n<|box_start|>", decoded_prefix)
 
-    def test_parse_single_turn_generation_treats_closed_message_as_clean_stop(self) -> None:
+    def test_prepare_single_turn_generation_content_mode_opens_me_entry_without_payload_start(self) -> None:
         tokenizer = FakeTokenizer()
-        tokenizer.eos_token_id = 42
+        tokenizer.eos_token_id = None
+        tokenizer.pad_token_id = 7
         encoder = AgenticContextEncoder(tokenizer)
 
-        result = parse_single_turn_generation(
-            tokenizer.encode("hello", add_special_tokens=False)
-            + [
-                QWEN3_AGENTIC_TOKEN_TABLE.opaque_payload_end,
-                QWEN3_AGENTIC_TOKEN_TABLE.message_end,
-            ],
-            encoder=encoder,
-            tokenizer=tokenizer,
+        inputs = prepare_single_turn_generation(
+            "hello",
+            encoder,
+            tokenizer,
+            prompt_config=InferencePromptConfig(),
+            generation_mode=GENERATION_MODE_CONTENT,
         )
 
-        self.assertEqual(result.text, "hello")
-        self.assertEqual(result.display_text, "hello")
-        self.assertEqual(result.stop_reason, STOP_REASON_MESSAGE_END)
-        self.assertTrue(result.clean_termination)
-        self.assertEqual(result.stop_token_name, "message_end")
-        self.assertEqual(result.parser_state_at_stop, inference_runtime.PARSER_STATE_AFTER_PAYLOAD_END)
-        self.assertEqual(result.termination_detail, "closed_message")
-
-    def test_parse_single_turn_generation_marks_unclosed_message_end_as_not_clean(self) -> None:
-        tokenizer = FakeTokenizer()
-        tokenizer.eos_token_id = 42
-        encoder = AgenticContextEncoder(tokenizer)
-
-        result = parse_single_turn_generation(
-            tokenizer.encode("hello", add_special_tokens=False) + [QWEN3_AGENTIC_TOKEN_TABLE.message_end],
-            encoder=encoder,
-            tokenizer=tokenizer,
-        )
-
-        self.assertEqual(result.text, "hello")
-        self.assertEqual(result.stop_reason, STOP_REASON_MESSAGE_END)
-        self.assertFalse(result.clean_termination)
-        self.assertEqual(result.termination_detail, "message_end_before_payload_end")
-
-    def test_parse_single_turn_generation_stops_before_unexpected_structure_token(self) -> None:
-        tokenizer = FakeTokenizer()
-        tokenizer.eos_token_id = 42
-        encoder = AgenticContextEncoder(tokenizer)
-
-        result = parse_single_turn_generation(
-            tokenizer.encode("hello", add_special_tokens=False) + [QWEN3_AGENTIC_TOKEN_TABLE.opaque_payload_start],
-            encoder=encoder,
-            tokenizer=tokenizer,
-        )
-
-        self.assertEqual(result.text, "hello")
-        self.assertEqual(result.display_text, "hello")
-        self.assertEqual(result.stop_reason, STOP_REASON_STRUCTURE_TOKEN)
-        self.assertFalse(result.clean_termination)
-        self.assertEqual(result.stop_token_name, "opaque_payload_start")
-        self.assertEqual(result.termination_detail, "unexpected_structure_in_payload")
-
-    def test_parse_single_turn_generation_rejects_text_after_payload_end(self) -> None:
-        tokenizer = FakeTokenizer()
-        tokenizer.eos_token_id = 42
-        encoder = AgenticContextEncoder(tokenizer)
-
-        result = parse_single_turn_generation(
-            tokenizer.encode("hello", add_special_tokens=False)
-            + [
-                QWEN3_AGENTIC_TOKEN_TABLE.opaque_payload_end,
-                1000 + ord("!"),
-            ],
-            encoder=encoder,
-            tokenizer=tokenizer,
-        )
-
-        self.assertEqual(result.text, "hello")
-        self.assertEqual(result.stop_reason, STOP_REASON_PROTOCOL_VIOLATION)
-        self.assertFalse(result.clean_termination)
-        self.assertEqual(result.termination_detail, "text_after_payload_end")
+        decoded_prefix = tokenizer.decode(inputs.prefix_ids, skip_special_tokens=False)
+        self.assertTrue(decoded_prefix.endswith("<|im_start|>me\n"))
+        self.assertNotIn("<|box_start|>", decoded_prefix.split("<|im_start|>me\n")[-1])
 
     def test_generate_single_turn_result_returns_structured_result(self) -> None:
         try:
@@ -168,7 +124,8 @@ class InferLoraTests(unittest.TestCase):
             encoder=encoder,
             tokenizer=tokenizer,
             model=model,
-            belief_prompt="You are a tester.",
+            prompt_config=InferencePromptConfig(belief_prompt="我应当直接回应开发者。"),
+            generation_mode=GENERATION_MODE_CONTENT,
             max_new_tokens=16,
             temperature=0.0,
             top_p=1.0,
@@ -180,7 +137,177 @@ class InferLoraTests(unittest.TestCase):
         self.assertEqual(result.stop_reason, STOP_REASON_EOS_TOKEN)
         self.assertFalse(result.clean_termination)
 
-    def test_load_lora_inference_model_uses_torch_dtype_keyword(self) -> None:
+    def test_parse_single_turn_generation_content_mode_keeps_freeform_text(self) -> None:
+        tokenizer = FakeTokenizer()
+        tokenizer.eos_token_id = 42
+        encoder = AgenticContextEncoder(tokenizer)
+
+        result = parse_single_turn_generation(
+            tokenizer.encode("thinking<acml:action>Call()</acml:action>", add_special_tokens=False),
+            encoder=encoder,
+            tokenizer=tokenizer,
+            generation_mode=GENERATION_MODE_CONTENT,
+        )
+
+        self.assertEqual(result.text, "thinking<acml:action>Call()</acml:action>")
+        self.assertEqual(result.stop_reason, inference_runtime.STOP_REASON_MAX_NEW_TOKENS)
+        self.assertFalse(result.clean_termination)
+
+    def test_parse_single_turn_generation_content_mode_keeps_quad_wrapped_action_tokens(self) -> None:
+        tokenizer = FakeTokenizer()
+        tokenizer.eos_token_id = 42
+        encoder = AgenticContextEncoder(tokenizer)
+
+        result = parse_single_turn_generation(
+            tokenizer.encode("thinking ", add_special_tokens=False)
+            + [
+                QWEN3_AGENTIC_TOKEN_TABLE.action_start,
+                *tokenizer.encode("Call(", add_special_tokens=False),
+                QWEN3_AGENTIC_TOKEN_TABLE.opaque_payload_start,
+                *tokenizer.encode("x", add_special_tokens=False),
+                QWEN3_AGENTIC_TOKEN_TABLE.opaque_payload_end,
+                *tokenizer.encode(")", add_special_tokens=False),
+                QWEN3_AGENTIC_TOKEN_TABLE.action_end,
+            ],
+            encoder=encoder,
+            tokenizer=tokenizer,
+            generation_mode=GENERATION_MODE_CONTENT,
+        )
+
+        self.assertIn("<|quad_start|>", result.text)
+        self.assertIn("<|box_start|>x<|box_end|>", result.text)
+        self.assertIn("<|quad_end|>", result.text)
+
+    def test_parse_single_turn_generation_content_mode_rejects_action_inside_payload(self) -> None:
+        tokenizer = FakeTokenizer()
+        tokenizer.eos_token_id = 42
+        encoder = AgenticContextEncoder(tokenizer)
+
+        result = parse_single_turn_generation(
+            [
+                QWEN3_AGENTIC_TOKEN_TABLE.opaque_payload_start,
+                *tokenizer.encode("x", add_special_tokens=False),
+                QWEN3_AGENTIC_TOKEN_TABLE.action_start,
+            ],
+            encoder=encoder,
+            tokenizer=tokenizer,
+            generation_mode=GENERATION_MODE_CONTENT,
+        )
+
+        self.assertEqual(result.text, "<|box_start|>x")
+        self.assertEqual(result.stop_reason, STOP_REASON_PROTOCOL_VIOLATION)
+        self.assertEqual(result.termination_detail, "unexpected_action_start_in_payload")
+
+    def test_parse_single_turn_generation_content_mode_rejects_nested_action(self) -> None:
+        tokenizer = FakeTokenizer()
+        tokenizer.eos_token_id = 42
+        encoder = AgenticContextEncoder(tokenizer)
+
+        result = parse_single_turn_generation(
+            [
+                QWEN3_AGENTIC_TOKEN_TABLE.action_start,
+                *tokenizer.encode("Call(", add_special_tokens=False),
+                QWEN3_AGENTIC_TOKEN_TABLE.action_start,
+            ],
+            encoder=encoder,
+            tokenizer=tokenizer,
+            generation_mode=GENERATION_MODE_CONTENT,
+        )
+
+        self.assertEqual(result.text, "<|quad_start|>Call(")
+        self.assertEqual(result.stop_reason, STOP_REASON_PROTOCOL_VIOLATION)
+        self.assertEqual(result.termination_detail, "unexpected_nested_action")
+
+    def test_parse_single_turn_generation_content_mode_does_not_mark_unclosed_action_eos_as_clean(self) -> None:
+        tokenizer = FakeTokenizer()
+        tokenizer.eos_token_id = 42
+        encoder = AgenticContextEncoder(tokenizer)
+
+        result = parse_single_turn_generation(
+            [
+                QWEN3_AGENTIC_TOKEN_TABLE.action_start,
+                *tokenizer.encode("Call(", add_special_tokens=False),
+                tokenizer.eos_token_id,
+            ],
+            encoder=encoder,
+            tokenizer=tokenizer,
+            generation_mode=GENERATION_MODE_CONTENT,
+        )
+
+        self.assertEqual(result.text, "<|quad_start|>Call(")
+        self.assertEqual(result.stop_reason, STOP_REASON_EOS_TOKEN)
+        self.assertFalse(result.clean_termination)
+        self.assertEqual(result.termination_detail, "eos_before_content_closed")
+
+    def test_parse_single_turn_generation_content_mode_stops_before_reserved_structure_token(self) -> None:
+        tokenizer = FakeTokenizer()
+        tokenizer.eos_token_id = 42
+        encoder = AgenticContextEncoder(tokenizer)
+
+        result = parse_single_turn_generation(
+            tokenizer.encode("thinking", add_special_tokens=False) + [QWEN3_AGENTIC_TOKEN_TABLE.entry_start],
+            encoder=encoder,
+            tokenizer=tokenizer,
+            generation_mode=GENERATION_MODE_CONTENT,
+        )
+
+        self.assertEqual(result.text, "thinking")
+        self.assertEqual(result.stop_reason, STOP_REASON_STRUCTURE_TOKEN)
+        self.assertEqual(result.termination_detail, "unexpected_structure_in_content")
+
+    def test_parse_single_turn_generation_entry_mode_extracts_payload_from_me_entry(self) -> None:
+        tokenizer = FakeTokenizer()
+        tokenizer.eos_token_id = 42
+        encoder = AgenticContextEncoder(tokenizer)
+
+        result = parse_single_turn_generation(
+            [
+                QWEN3_AGENTIC_TOKEN_TABLE.entry_start,
+                1000 + ord("m"),
+                1000 + ord("e"),
+                1000 + ord("\n"),
+                QWEN3_AGENTIC_TOKEN_TABLE.opaque_payload_start,
+                *tokenizer.encode("hello", add_special_tokens=False),
+                QWEN3_AGENTIC_TOKEN_TABLE.opaque_payload_end,
+                QWEN3_AGENTIC_TOKEN_TABLE.entry_end,
+            ],
+            encoder=encoder,
+            tokenizer=tokenizer,
+            generation_mode=GENERATION_MODE_ENTRY,
+            next_kind="me",
+        )
+
+        self.assertEqual(result.text, "hello")
+        self.assertEqual(result.display_text, "hello")
+        self.assertTrue(result.clean_termination)
+        self.assertEqual(result.stop_reason, STOP_REASON_ENTRY_END)
+
+    def test_parse_single_turn_generation_entry_mode_allows_text_first_me_entry_content(self) -> None:
+        tokenizer = FakeTokenizer()
+        tokenizer.eos_token_id = 42
+        encoder = AgenticContextEncoder(tokenizer)
+
+        result = parse_single_turn_generation(
+            [
+                QWEN3_AGENTIC_TOKEN_TABLE.entry_start,
+                1000 + ord("m"),
+                1000 + ord("e"),
+                1000 + ord("\n"),
+                *tokenizer.encode("thinking", add_special_tokens=False),
+                QWEN3_AGENTIC_TOKEN_TABLE.entry_end,
+            ],
+            encoder=encoder,
+            tokenizer=tokenizer,
+            generation_mode=GENERATION_MODE_ENTRY,
+            next_kind="me",
+        )
+
+        self.assertEqual(result.text, "thinking")
+        self.assertEqual(result.display_text, "thinking")
+        self.assertTrue(result.clean_termination)
+        self.assertEqual(result.stop_reason, STOP_REASON_ENTRY_END)
+
+    def test_load_lora_inference_model_uses_dtype_keyword(self) -> None:
         try:
             import torch
         except ImportError:
@@ -233,30 +360,30 @@ class InferLoraTests(unittest.TestCase):
                     load_in_4bit=False,
                 )
 
-        self.assertIn("torch_dtype", captured_kwargs)
-        self.assertNotIn("dtype", captured_kwargs)
-        self.assertEqual(captured_kwargs["torch_dtype"], torch.bfloat16 if torch.cuda.is_available() else torch.float32)
+        self.assertIn("dtype", captured_kwargs)
+        self.assertNotIn("torch_dtype", captured_kwargs)
+        self.assertEqual(captured_kwargs["dtype"], torch.bfloat16 if torch.cuda.is_available() else torch.float32)
 
     def test_format_generation_result_hides_structure_tokens_and_shows_status(self) -> None:
         rendered = format_generation_result(
             SingleTurnGenerationResult(
                 text="answer",
                 display_text="answer",
-                output_ids=[1000 + ord("a"), QWEN3_AGENTIC_TOKEN_TABLE.message_start],
+                output_ids=[1000 + ord("a"), QWEN3_AGENTIC_TOKEN_TABLE.entry_start],
                 content_ids=[1000 + ord("a")],
                 stop_reason=STOP_REASON_STRUCTURE_TOKEN,
                 clean_termination=False,
-                stop_token_id=QWEN3_AGENTIC_TOKEN_TABLE.message_start,
-                stop_token_name="message_start",
+                stop_token_id=QWEN3_AGENTIC_TOKEN_TABLE.entry_start,
+                stop_token_name="entry_start",
                 termination_detail="unexpected_structure_in_payload",
             )
         )
 
         self.assertEqual(
             rendered,
-            "answer\n[stop_reason=structure_token, clean_termination=false, detail=unexpected_structure_in_payload, token=message_start]",
+            "answer\n[stop_reason=structure_token, clean_termination=false, detail=unexpected_structure_in_payload, token=entry_start]",
         )
-        self.assertNotIn(QWEN3_AGENTIC_TOKEN_TABLE.message_start_text, rendered)
+        self.assertNotIn(QWEN3_AGENTIC_TOKEN_TABLE.entry_start_text, rendered)
 
     def test_format_generation_result_strips_only_at_display_boundary(self) -> None:
         rendered = format_generation_result(
@@ -265,7 +392,7 @@ class InferLoraTests(unittest.TestCase):
                 display_text="answer",
                 output_ids=[1000 + ord("a")],
                 content_ids=[1000 + ord("a")],
-                stop_reason=STOP_REASON_MESSAGE_END,
+                stop_reason=STOP_REASON_ENTRY_END,
                 clean_termination=True,
             )
         )

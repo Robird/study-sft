@@ -7,6 +7,6 @@ repo_root=$(cd -- "${script_dir}/.." && pwd)
 cd "${repo_root}"
 
 python src/infer_lora.py \
-  --adapter_path /mnt/fast/LLM/study-sft/smoke-acml-lora \
+  --adapter_path /mnt/fast/LLM/study-sft/qwen3-1.7b-acml-lora \
   --load_in_4bit false \
   "$@"

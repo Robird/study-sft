@@ -22,9 +22,10 @@ from study_sft.agentic_context import (
     SPAN_KIND_NEWLINE,
     SPAN_KIND_OPAQUE_PAYLOAD,
     SPAN_KIND_STRUCTURE,
+    SPAN_KIND_TEXT,
     Span,
 )
-from study_sft.agentic_context_model import AgenticContext, AgenticEntry, AgenticOpaquePayload
+from study_sft.agentic_context_model import AgenticAction, AgenticContext, AgenticEntry, AgenticOpaquePayload, AgenticText
 from study_sft.agentic_context_schema import agentic_context_from_dict
 
 
@@ -165,8 +166,41 @@ class AgenticContextTests(unittest.TestCase):
             )
 
     def test_encode_context_rejects_invalid_typed_content(self) -> None:
-        with self.assertRaisesRegex(ValueError, "AgenticEntry.content items must be AgenticOpaquePayload values"):
+        with self.assertRaisesRegex(ValueError, "AgenticEntry.content items must be AgenticText, AgenticOpaquePayload, or AgenticAction values"):
             AgenticEntry(kind="me", content=("answer",))  # type: ignore[arg-type]
+
+    def test_dict_schema_accepts_text_and_action_items(self) -> None:
+        encoder = AgenticContextEncoder(FakeTokenizer())
+
+        context = agentic_context_from_dict(
+            {
+                "entries": [
+                    {
+                        "kind": "me",
+                        "content": [
+                            {"kind": "text", "text": "thinking"},
+                            {
+                                "kind": "action",
+                                "content": [
+                                    {"kind": "text", "text": "Call("},
+                                    {"kind": "opaque_payload", "text": "x"},
+                                    {"kind": "text", "text": ")"},
+                                ],
+                            },
+                        ],
+                    }
+                ]
+            },
+            policy=encoder.policy,
+        )
+
+        self.assertEqual(
+            context.entries[0].content,
+            (
+                AgenticText("thinking"),
+                AgenticAction((AgenticText("Call("), AgenticOpaquePayload("x"), AgenticText(")"))),
+            ),
+        )
 
     def test_encode_context_with_debug_marks_only_payload_spans_as_non_structure(self) -> None:
         tokenizer = FakeTokenizer()
@@ -231,26 +265,39 @@ class AgenticContextTests(unittest.TestCase):
         self.assertEqual(len(training_spans.opaque_payload_spans), 3)
         self.assertEqual(training_spans.opaque_payload_spans[-1], OpaquePayloadSpan(start=training_spans.opaque_payload_spans[-1].start, end=training_spans.opaque_payload_spans[-1].end, entry_kind="me", loss=True))
 
-    def test_encode_generation_payload_prefix_opens_message_and_payload(self) -> None:
+    def test_encode_context_with_debug_tracks_text_and_action_structure(self) -> None:
         tokenizer = FakeTokenizer()
         encoder = AgenticContextEncoder(tokenizer)
-        context = agentic_context_from_dict(
-            {"entries": [{"kind": "observation", "content": [{"kind": "opaque_payload", "text": "hello"}]}]},
-            policy=encoder.policy,
+        debug_encoded = encoder.encode_context_with_debug(
+            AgenticContext(
+                entries=(
+                    AgenticEntry(
+                        kind="me",
+                        content=(
+                            AgenticText("thinking "),
+                            AgenticAction((AgenticText("Call("), AgenticOpaquePayload("x"), AgenticText(")"))),
+                        ),
+                    ),
+                )
+            ),
+            validate=True,
         )
 
-        prefix_ids = encoder.encode_generation_payload_prefix(context, next_kind="me")
-        encoded = encoder.encode_context(context)
-
-        self.assertEqual(prefix_ids[: len(encoded.input_ids)], encoded.input_ids)
         self.assertEqual(
-            prefix_ids[-5:],
+            [span.kind for span in debug_encoded.spans],
             [
-                QWEN3_AGENTIC_TOKEN_TABLE.message_start,
-                1000 + ord("m"),
-                1000 + ord("e"),
-                1000 + ord("\n"),
-                QWEN3_AGENTIC_TOKEN_TABLE.opaque_payload_start,
+                SPAN_KIND_STRUCTURE,
+                SPAN_KIND_KIND,
+                SPAN_KIND_TEXT,
+                SPAN_KIND_STRUCTURE,
+                SPAN_KIND_TEXT,
+                SPAN_KIND_STRUCTURE,
+                SPAN_KIND_OPAQUE_PAYLOAD,
+                SPAN_KIND_STRUCTURE,
+                SPAN_KIND_TEXT,
+                SPAN_KIND_STRUCTURE,
+                SPAN_KIND_STRUCTURE,
+                SPAN_KIND_NEWLINE,
             ],
         )
 
@@ -277,26 +324,24 @@ class AgenticContextTests(unittest.TestCase):
         self.assertEqual(entry_spans[1].kind, "me")
         self.assertTrue(entry_spans[1].loss)
 
-    def test_validate_rejects_text_outside_payload(self) -> None:
+    def test_validate_accepts_text_outside_payload_and_action_blocks(self) -> None:
         tokenizer = FakeTokenizer()
-        encoder = AgenticContextEncoder(tokenizer, AgenticContextPolicy(allowed_kinds=("belief", "observation", "me", "user")))
-        encoded = EncodedContext(
-            input_ids=[
-                QWEN3_AGENTIC_TOKEN_TABLE.message_start,
-                1000 + ord("u"),
-                1000 + ord("s"),
-                1000 + ord("e"),
-                1000 + ord("r"),
-                1000 + ord("\n"),
-                1000 + ord("x"),
-                QWEN3_AGENTIC_TOKEN_TABLE.message_end,
-                1000 + ord("\n"),
-            ],
-            loss_mask=[0] * 9,
+        encoder = AgenticContextEncoder(tokenizer)
+        encoded = encoder.encode_context(
+            AgenticContext(
+                entries=(
+                    AgenticEntry(
+                        kind="me",
+                        content=(
+                            AgenticText("thinking"),
+                            AgenticAction((AgenticText("Call("), AgenticOpaquePayload("x"), AgenticText(")"))),
+                        ),
+                    ),
+                )
+            ),
         )
 
-        with self.assertRaisesRegex(ValueError, "entry content must be opaque_payload blocks"):
-            encoder.validate(encoded)
+        encoder.validate(encoded)
 
     def test_empty_context_is_valid(self) -> None:
         encoder = AgenticContextEncoder(FakeTokenizer())

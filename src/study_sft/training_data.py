@@ -3,31 +3,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
 from study_sft.adapters.acml import agentic_context_from_acml_record
 from study_sft.agentic_context import (
     AgenticContextEncoder,
     EncodedContext,
     EntrySpan,
-    OpaquePayloadSpan,
 )
-
-
-TrainingLabelPolicy = Literal["entry", "payload_only"]
 
 
 @dataclass(frozen=True)
 class TrainingEncodingConfig:
     max_length: int
-    label_policy: TrainingLabelPolicy = "entry"
 
 
 @dataclass(frozen=True)
 class PreparedTrainingEncoding:
     encoded: EncodedContext
     entry_spans: tuple[EntrySpan, ...]
-    opaque_payload_spans: tuple[OpaquePayloadSpan, ...] = ()
 
 
 def _has_supervised_labels(labels: list[int]) -> bool:
@@ -39,28 +33,6 @@ def _labels_from_entry_loss(encoded: EncodedContext) -> list[int]:
         token_id if loss else -100
         for token_id, loss in zip(encoded.input_ids, encoded.loss_mask, strict=True)
     ]
-
-
-def _labels_from_payload_only(prepared: PreparedTrainingEncoding) -> list[int]:
-    labels = [-100] * len(prepared.encoded.input_ids)
-    for span in prepared.opaque_payload_spans:
-        if prepared.encoded.loss_mask[span.start] != 1:
-            continue
-        for index in range(span.start, span.end):
-            labels[index] = prepared.encoded.input_ids[index]
-    return labels
-
-
-def _labels_from_prepared_training_encoding(
-    prepared: PreparedTrainingEncoding,
-    *,
-    label_policy: TrainingLabelPolicy,
-) -> list[int]:
-    if label_policy == "entry":
-        return _labels_from_entry_loss(prepared.encoded)
-    if label_policy == "payload_only":
-        return _labels_from_payload_only(prepared)
-    raise ValueError(f"unsupported label_policy: {label_policy!r}")
 
 
 def _truncate_to_supervised_suffix_start(
@@ -107,27 +79,7 @@ def _slice_entry_spans(entry_spans: tuple[EntrySpan, ...], *, start: int) -> tup
                 kind=span.kind,
                 loss=span.loss,
             )
-        )
-    return tuple(sliced)
-
-
-def _slice_opaque_payload_spans(
-    opaque_payload_spans: tuple[OpaquePayloadSpan, ...],
-    *,
-    start: int,
-) -> tuple[OpaquePayloadSpan, ...]:
-    sliced: list[OpaquePayloadSpan] = []
-    for span in opaque_payload_spans:
-        if span.end <= start:
-            continue
-        sliced.append(
-            OpaquePayloadSpan(
-                start=span.start - start,
-                end=span.end - start,
-                entry_kind=span.entry_kind,
-                loss=span.loss,
-            )
-        )
+    )
     return tuple(sliced)
 
 
@@ -136,17 +88,14 @@ def _prepare_training_context_encoding(
     encoder: AgenticContextEncoder,
     *,
     validate_encoding: bool = False,
-    label_policy: TrainingLabelPolicy = "entry",
 ) -> PreparedTrainingEncoding:
     artifacts = encoder.encode_context_artifacts(
         context,
-        include_opaque_payload_spans=label_policy == "payload_only",
         validate=validate_encoding,
     )
     return PreparedTrainingEncoding(
         encoded=artifacts.encoded,
         entry_spans=artifacts.entry_spans,
-        opaque_payload_spans=artifacts.opaque_payload_spans,
     )
 
 
@@ -169,7 +118,6 @@ def _truncate_prepared_training_encoding(
     return PreparedTrainingEncoding(
         encoded=_slice_encoded_context(prepared.encoded, start=start),
         entry_spans=_slice_entry_spans(prepared.entry_spans, start=start),
-        opaque_payload_spans=_slice_opaque_payload_spans(prepared.opaque_payload_spans, start=start),
     )
 
 
@@ -179,20 +127,18 @@ def encode_training_context(
     *,
     max_length: int | None = None,
     validate_encoding: bool = False,
-    label_policy: TrainingLabelPolicy = "entry",
 ) -> dict[str, list[int]] | None:
     prepared = _prepare_training_context_encoding(
         context,
         encoder,
         validate_encoding=validate_encoding,
-        label_policy=label_policy,
     )
     prepared = _truncate_prepared_training_encoding(prepared, max_length=max_length)
     if prepared is None:
         return None
     features = {
         "input_ids": prepared.encoded.input_ids,
-        "labels": _labels_from_prepared_training_encoding(prepared, label_policy=label_policy),
+        "labels": _labels_from_entry_loss(prepared.encoded),
     }
     if not _has_supervised_labels(features["labels"]):
         raise ValueError("training features contain no supervised labels")
@@ -212,5 +158,4 @@ def encode_training_features_from_record(
         encoder,
         max_length=config.max_length,
         validate_encoding=validate_encoding,
-        label_policy=config.label_policy,
     )
