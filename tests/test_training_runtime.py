@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import errno
 import json
 from pathlib import Path
 import tempfile
 import train_sft
 import unittest
+from contextlib import contextmanager
 from unittest.mock import patch
 
 from datasets import Dataset
@@ -402,6 +404,103 @@ class TrainingRuntimeTests(unittest.TestCase):
         self.assertEqual(len(encoded), 1)
         self.assertEqual(encode_mock.call_count, 1)
 
+    def test_prepare_training_dataset_rechecks_cache_after_waiting_for_lock(self) -> None:
+        dataset = make_acml_dataset(make_acml_document())
+        encoder = AgenticContextEncoder(FakeTokenizer())
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_dir = Path(temp_dir)
+            cache_payload = build_training_dataset_cache_identity(
+                dataset,
+                encoder=encoder,
+                encoding_config=make_encoding_config(),
+                dataset_locator=make_dataset_locator(dataset_name="unit-test"),
+            )
+            cache_key = training_dataset_cache_key(cache_payload)
+            cache_path = cache_dir / cache_key
+            encoded = encode_training_dataset(
+                dataset,
+                encoder=encoder,
+                encoding_config=make_encoding_config(),
+            )
+
+            @contextmanager
+            def populate_cache_during_lock(_cache_path: Path):
+                self.assertEqual(_cache_path, cache_path)
+                encoded.save_to_disk(str(cache_path))
+                training_cache.write_training_dataset_cache_metadata(
+                    cache_path,
+                    {
+                        **cache_payload,
+                        "cache_key": cache_key,
+                        "validated": False,
+                    },
+                )
+                yield
+
+            with patch(
+                "study_sft.training_cache.training_dataset_cache_lock",
+                side_effect=populate_cache_during_lock,
+            ), patch(
+                "study_sft.training_dataset.encode_training_dataset",
+                side_effect=AssertionError("cache should be re-checked after waiting for lock"),
+            ):
+                cached = prepare_training_dataset(
+                    dataset,
+                    encoder=encoder,
+                    encoding_config=make_encoding_config(),
+                    build_options=make_build_options(cache_dir=cache_dir),
+                    dataset_locator=make_dataset_locator(dataset_name="unit-test"),
+                )
+
+        self.assertEqual(len(cached), 1)
+
+    def test_prepare_training_dataset_recovers_from_directory_not_empty_rename_race(self) -> None:
+        dataset = make_acml_dataset(make_acml_document())
+        encoder = AgenticContextEncoder(FakeTokenizer())
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            cache_dir = Path(temp_dir)
+            cache_payload = build_training_dataset_cache_identity(
+                dataset,
+                encoder=encoder,
+                encoding_config=make_encoding_config(),
+                dataset_locator=make_dataset_locator(dataset_name="unit-test"),
+            )
+            cache_key = training_dataset_cache_key(cache_payload)
+            cache_path = cache_dir / cache_key
+            winner_dataset = encode_training_dataset(
+                dataset,
+                encoder=encoder,
+                encoding_config=make_encoding_config(),
+            )
+            original_rename = Path.rename
+
+            def rename_with_race(self: Path, target: Path):
+                if self.parent == cache_dir and Path(target) == cache_path and not cache_path.exists():
+                    winner_dataset.save_to_disk(str(cache_path))
+                    training_cache.write_training_dataset_cache_metadata(
+                        cache_path,
+                        {
+                            **cache_payload,
+                            "cache_key": cache_key,
+                            "validated": False,
+                        },
+                    )
+                    raise OSError(errno.ENOTEMPTY, "Directory not empty")
+                return original_rename(self, target)
+
+            with patch("pathlib.Path.rename", new=rename_with_race):
+                cached = prepare_training_dataset(
+                    dataset,
+                    encoder=encoder,
+                    encoding_config=make_encoding_config(),
+                    build_options=make_build_options(cache_dir=cache_dir),
+                    dataset_locator=make_dataset_locator(dataset_name="unit-test"),
+                )
+
+        self.assertEqual(len(cached), 1)
+
     def test_prepare_training_dataset_recovers_after_partial_cache_write_failure(self) -> None:
         dataset = make_acml_dataset(make_acml_document())
         encoder = AgenticContextEncoder(FakeTokenizer())
@@ -421,7 +520,10 @@ class TrainingRuntimeTests(unittest.TestCase):
                         dataset_locator=make_dataset_locator(dataset_name="unit-test"),
                     )
 
-            self.assertEqual([path.name for path in cache_dir.iterdir()], [])
+            self.assertEqual(
+                [path.name for path in cache_dir.iterdir() if path.is_dir()],
+                [],
+            )
 
     def test_prepare_training_dataset_rejects_dataset_without_acml_column(self) -> None:
         with self.assertRaisesRegex(ValueError, "expects a dataset with an 'acml' column"):

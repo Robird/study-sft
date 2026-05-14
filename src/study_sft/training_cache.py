@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import errno
+import fcntl
 import json
 import logging
 from pathlib import Path
 import shutil
 import tempfile
+from contextlib import contextmanager
 from typing import Any, Callable
 
 from datasets import Dataset, load_from_disk
@@ -17,6 +20,22 @@ _CACHE_METADATA_FILENAME = "cache_meta.json"
 
 def training_dataset_cache_metadata_path(cache_path: Path) -> Path:
     return cache_path / _CACHE_METADATA_FILENAME
+
+
+def training_dataset_cache_lock_path(cache_path: Path) -> Path:
+    return cache_path.parent / f".lock-{cache_path.name}"
+
+
+@contextmanager
+def training_dataset_cache_lock(cache_path: Path):
+    lock_path = training_dataset_cache_lock_path(cache_path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def is_complete_training_dataset_cache_path(cache_path: Path) -> bool:
@@ -63,13 +82,17 @@ class TrainingDatasetCacheStore:
         cached = self._load_cached_dataset(cache_path, validate=validate)
         if cached is not None:
             return cached
-        return self._encode_and_store_dataset(
-            cache_path,
-            cache_key=cache_key,
-            metadata=metadata,
-            build=build,
-            validated=validate is not None,
-        )
+        with training_dataset_cache_lock(cache_path):
+            cached = self._load_cached_dataset(cache_path, validate=validate)
+            if cached is not None:
+                return cached
+            return self._encode_and_store_dataset(
+                cache_path,
+                cache_key=cache_key,
+                metadata=metadata,
+                build=build,
+                validated=validate is not None,
+            )
 
     def _load_cached_dataset(
         self,
@@ -123,16 +146,23 @@ class TrainingDatasetCacheStore:
                 },
             )
             temp_cache_path.rename(cache_path)
-        except FileExistsError:
+        except OSError as exc:
             assert temp_cache_path is not None
-            if is_complete_training_dataset_cache_path(cache_path):
-                remove_training_dataset_cache_path(temp_cache_path)
-            else:
-                if self.logger is not None:
-                    self.logger.warning("缓存目标已存在但不完整，使用当前写入重建: %s", cache_path)
-                remove_training_dataset_cache_path(cache_path)
-                temp_cache_path.rename(cache_path)
-            temp_cache_path = None
+            if exc.errno not in {errno.EEXIST, errno.ENOTEMPTY}:
+                raise
+            try:
+                if is_complete_training_dataset_cache_path(cache_path):
+                    if self.logger is not None:
+                        self.logger.info("检测到并发缓存写入已完成，复用现有缓存: %s", cache_path)
+                    remove_training_dataset_cache_path(temp_cache_path)
+                else:
+                    if self.logger is not None:
+                        self.logger.warning("缓存目标已存在但不完整，使用当前写入重建: %s", cache_path)
+                    remove_training_dataset_cache_path(cache_path)
+                    temp_cache_path.rename(cache_path)
+                temp_cache_path = None
+            except Exception:
+                raise exc
         else:
             temp_cache_path = None
         finally:
