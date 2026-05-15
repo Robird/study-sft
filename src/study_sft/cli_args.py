@@ -78,6 +78,11 @@ def add_inference_context_args(parser: argparse.ArgumentParser) -> None:
         help="推理时写入 observation/belief 的开发者名称。",
     )
     parser.add_argument(
+        "--developer_entity_id",
+        default=None,
+        help="可选：显式指定开发者 entity_id；默认按 developer_name 稳定生成。",
+    )
+    parser.add_argument(
         "--message_source",
         default=DEFAULT_MESSAGE_SOURCE,
         help="推理 observation 中使用的消息来源描述。",

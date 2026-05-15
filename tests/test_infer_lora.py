@@ -6,6 +6,7 @@ from unittest.mock import patch
 import study_sft.inference_runtime as inference_runtime
 from study_sft.agentic_context import AgenticContextEncoder, QWEN3_AGENTIC_TOKEN_TABLE
 from study_sft.inference_prompts import (
+    BELIEF_ENTITY_REGISTRY_LABEL,
     InferencePromptConfig,
     acml_from_user_text,
     agentic_context_from_user_text,
@@ -53,13 +54,24 @@ class InferLoraTests(unittest.TestCase):
             "请帮我看一下 infer_lora.py",
             config=InferencePromptConfig(
                 developer_name="刘世超",
+                developer_entity_id="p_dev_00001",
                 message_source="控制台",
                 reply_tool_name="SendMessage",
                 belief_prompt="我应当直接回应开发者的真实需求。",
             ),
         )
 
+        self.assertIn(
+            'kind="observation" source="console" relation="developer" entity_id="p_dev_00001" '
+            'entity_name="刘世超" entity_mention="刘世超"',
+            rendered,
+        )
         self.assertIn("我收到刘世超从控制台发来的消息：<acml:payload>请帮我看一下 infer_lora.py</acml:payload>", rendered)
+        self.assertIn(
+            f'{BELIEF_ENTITY_REGISTRY_LABEL}\n'
+            '[{"entity_id":"p_dev_00001","entity_type":"person","relation":"developer","name":"刘世超","mention":"刘世超"}]',
+            rendered,
+        )
         self.assertIn("刘世超是我的开发者。", rendered)
         self.assertIn("void SendMessage(string target_entity_id, string message);", rendered)
         self.assertIn("我应当直接回应开发者的真实需求。", rendered)

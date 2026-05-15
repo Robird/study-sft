@@ -89,6 +89,7 @@ def build_inference_prompt_config(args: argparse.Namespace) -> InferencePromptCo
     return InferencePromptConfig(
         belief_prompt=args.belief_prompt,
         developer_name=args.developer_name,
+        developer_entity_id=args.developer_entity_id,
         message_source=args.message_source,
         reply_tool_name=args.reply_tool_name,
     )
