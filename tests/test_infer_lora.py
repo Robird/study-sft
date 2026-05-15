@@ -355,16 +355,75 @@ class InferLoraTests(unittest.TestCase):
                     ),
                 },
             ):
-                inference_runtime.load_lora_inference_model(
-                    "fake-model",
-                    "fake-adapter",
-                    local_files_only=True,
-                    load_in_4bit=False,
-                )
+                with patch.object(torch.cuda, "is_available", return_value=True):
+                    inference_runtime.load_lora_inference_model(
+                        "fake-model",
+                        "fake-adapter",
+                        local_files_only=True,
+                        load_in_4bit=False,
+                    )
 
         self.assertIn("dtype", captured_kwargs)
         self.assertNotIn("torch_dtype", captured_kwargs)
-        self.assertEqual(captured_kwargs["dtype"], torch.bfloat16 if torch.cuda.is_available() else torch.float32)
+        self.assertEqual(captured_kwargs["dtype"], torch.bfloat16)
+        self.assertEqual(captured_kwargs["device_map"], {"": 0})
+
+    def test_load_lora_inference_model_can_use_auto_device_map_when_requested(self) -> None:
+        try:
+            import torch
+        except ImportError:
+            self.skipTest("torch is not installed")
+
+        captured_kwargs: dict[str, object] = {}
+
+        class _FakeAutoModelForCausalLM:
+            @staticmethod
+            def from_pretrained(model_name_or_path: str, **kwargs):
+                del model_name_or_path
+                captured_kwargs.update(kwargs)
+                return object()
+
+        class _FakePeftModel:
+            @staticmethod
+            def from_pretrained(model, adapter_path: str):
+                del adapter_path
+
+                class _WrappedModel:
+                    def eval(self):
+                        return None
+
+                self.assertIsNotNone(model)
+                return _WrappedModel()
+
+        class _FakeBitsAndBytesConfig:
+            def __init__(self, *, load_in_4bit: bool) -> None:
+                self.load_in_4bit = load_in_4bit
+
+        with patch.object(inference_runtime, "load_base_tokenizer", return_value=FakeTokenizer()):
+            with patch.dict(
+                "sys.modules",
+                {
+                    "peft": type("peft", (), {"PeftModel": _FakePeftModel}),
+                    "transformers": type(
+                        "transformers",
+                        (),
+                        {
+                            "AutoModelForCausalLM": _FakeAutoModelForCausalLM,
+                            "BitsAndBytesConfig": _FakeBitsAndBytesConfig,
+                        },
+                    ),
+                },
+            ):
+                with patch.object(torch.cuda, "is_available", return_value=True):
+                    inference_runtime.load_lora_inference_model(
+                        "fake-model",
+                        "fake-adapter",
+                        local_files_only=True,
+                        load_in_4bit=False,
+                        inference_device_map=inference_runtime.INFERENCE_DEVICE_MAP_AUTO,
+                    )
+
+        self.assertEqual(captured_kwargs["device_map"], "auto")
 
     def test_format_generation_result_hides_structure_tokens_and_shows_status(self) -> None:
         rendered = format_generation_result(

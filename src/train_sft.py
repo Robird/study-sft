@@ -19,7 +19,7 @@ from study_sft.cli_args import (
     add_model_source_args,
     add_optional_bool_arg,
 )
-from study_sft.agentic_context import AgenticContextEncoder
+from study_sft.agentic_context import AgenticContextEncoder, QWEN3_AGENTIC_TOKEN_TABLE
 from study_sft.loaders import (
     DEFAULT_MODEL_NAME_OR_PATH,
     ensure_tokenizer_pad_token,
@@ -42,6 +42,14 @@ from study_sft.training_runtime import AgenticDataCollator
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_LORA_TARGET_MODULES = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+DEFAULT_TRAINABLE_STRUCTURE_TOKEN_IDS = [
+    QWEN3_AGENTIC_TOKEN_TABLE.entry_start,
+    QWEN3_AGENTIC_TOKEN_TABLE.entry_end,
+    QWEN3_AGENTIC_TOKEN_TABLE.opaque_payload_start,
+    QWEN3_AGENTIC_TOKEN_TABLE.opaque_payload_end,
+    QWEN3_AGENTIC_TOKEN_TABLE.action_start,
+    QWEN3_AGENTIC_TOKEN_TABLE.action_end,
+]
 
 
 def _require_unsloth():
@@ -91,6 +99,7 @@ class ScriptArguments:
     lora_alpha: int = 64
     lora_dropout: float = 0.05
     lora_target_modules: Optional[str] = None
+    lora_train_structural_tokens: bool = True
     bias: str = "none"
     load_in_4bit: bool = False
     max_length: int = 2048
@@ -139,6 +148,12 @@ def parse_args() -> ScriptArguments:
     parser.add_argument("--lora_alpha", type=int, default=defaults.lora_alpha)
     parser.add_argument("--lora_dropout", type=float, default=defaults.lora_dropout)
     parser.add_argument("--lora_target_modules")
+    add_optional_bool_arg(
+        parser,
+        "--lora_train_structural_tokens",
+        default=defaults.lora_train_structural_tokens,
+        help="只训练 ACML 结构特殊 token 的 embedding/lm_head 行：im/box/quad start/end。",
+    )
     parser.add_argument("--bias", default=defaults.bias)
     add_optional_bool_arg(parser, "--load_in_4bit", default=defaults.load_in_4bit)
     parser.add_argument("--max_length", type=int, default=defaults.max_length)
@@ -164,6 +179,12 @@ def resolve_lora_target_modules(args: ScriptArguments) -> list[str]:
     if not args.lora_target_modules:
         return list(DEFAULT_LORA_TARGET_MODULES)
     return [name.strip() for name in args.lora_target_modules.split(",") if name.strip()]
+
+
+def resolve_trainable_token_indices(args: ScriptArguments) -> list[int] | None:
+    if not args.lora_train_structural_tokens:
+        return None
+    return list(DEFAULT_TRAINABLE_STRUCTURE_TOKEN_IDS)
 
 
 def resolve_gradient_checkpointing_mode(args: ScriptArguments) -> bool | str:
@@ -207,6 +228,7 @@ def load_model_and_tokenizer(args: ScriptArguments):
     FastLanguageModel, _ = _require_unsloth()
     LOGGER.info("使用 Unsloth 加载模型: %s", args.model_name_or_path)
     target_modules = resolve_lora_target_modules(args)
+    trainable_token_indices = resolve_trainable_token_indices(args)
     gradient_checkpointing = resolve_gradient_checkpointing_mode(args)
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=args.model_name_or_path,
@@ -230,6 +252,7 @@ def load_model_and_tokenizer(args: ScriptArguments):
         random_state=args.seed,
         use_rslora=False,
         loftq_config=None,
+        trainable_token_indices=trainable_token_indices,
     )
     model.print_trainable_parameters()
     return model, tokenizer

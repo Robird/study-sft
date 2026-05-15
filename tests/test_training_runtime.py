@@ -38,6 +38,21 @@ class ShiftedTextTokenizer(FakeTokenizer):
         return [token_id if token_id in reserved else token_id + 10000 for token_id in input_ids]
 
 
+class _FakeTrainTokenizer(FakeTokenizer):
+    eos_token = "<|endoftext|>"
+    eos_token_id = 151643
+    pad_token = "<|PAD_TOKEN|>"
+    pad_token_id = 151662
+
+
+class _FakeTrainModel:
+    def __init__(self) -> None:
+        self.printed_trainable_parameters = False
+
+    def print_trainable_parameters(self) -> None:
+        self.printed_trainable_parameters = True
+
+
 def make_encoding_config(
     *,
     max_length: int = 128,
@@ -96,6 +111,54 @@ def make_acml_dataset(*documents: str) -> Dataset:
 
 
 class TrainingRuntimeTests(unittest.TestCase):
+    def test_resolve_trainable_token_indices_defaults_to_all_structure_tokens(self) -> None:
+        self.assertEqual(
+            train_sft.resolve_trainable_token_indices(train_sft.ScriptArguments()),
+            [
+                QWEN3_AGENTIC_TOKEN_TABLE.entry_start,
+                QWEN3_AGENTIC_TOKEN_TABLE.entry_end,
+                QWEN3_AGENTIC_TOKEN_TABLE.opaque_payload_start,
+                QWEN3_AGENTIC_TOKEN_TABLE.opaque_payload_end,
+                QWEN3_AGENTIC_TOKEN_TABLE.action_start,
+                QWEN3_AGENTIC_TOKEN_TABLE.action_end,
+            ],
+        )
+
+    def test_resolve_trainable_token_indices_can_be_disabled(self) -> None:
+        self.assertIsNone(
+            train_sft.resolve_trainable_token_indices(
+                train_sft.ScriptArguments(lora_train_structural_tokens=False)
+            )
+        )
+
+    def test_load_model_and_tokenizer_passes_trainable_structure_token_indices(self) -> None:
+        captured_kwargs = {}
+        fake_model = _FakeTrainModel()
+        fake_tokenizer = _FakeTrainTokenizer()
+
+        class _FakeFastLanguageModel:
+            @staticmethod
+            def from_pretrained(**kwargs):
+                return fake_model, fake_tokenizer
+
+            @staticmethod
+            def get_peft_model(model, **kwargs):
+                captured_kwargs.update(kwargs)
+                return model
+
+        with patch.object(train_sft, "_require_unsloth", return_value=(_FakeFastLanguageModel, lambda: True)):
+            model, tokenizer = train_sft.load_model_and_tokenizer(
+                train_sft.ScriptArguments(model_name_or_path="fake-model")
+            )
+
+        self.assertIs(model, fake_model)
+        self.assertIs(tokenizer, fake_tokenizer)
+        self.assertTrue(fake_model.printed_trainable_parameters)
+        self.assertEqual(
+            captured_kwargs["trainable_token_indices"],
+            train_sft.DEFAULT_TRAINABLE_STRUCTURE_TOKEN_IDS,
+        )
+
     def test_assert_matching_training_tokenizer_ignores_pad_token_difference(self) -> None:
         encoded_encoder = AgenticContextEncoder(FakeTokenizer())
         training_tokenizer = FakeTokenizer()

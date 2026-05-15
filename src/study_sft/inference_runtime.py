@@ -30,6 +30,10 @@ STOP_REASON_MAX_NEW_TOKENS = "max_new_tokens"
 GENERATION_MODE_CONTENT = "content"
 GENERATION_MODE_ENTRY = "entry"
 
+INFERENCE_DEVICE_MAP_AUTO = "auto"
+INFERENCE_DEVICE_MAP_CPU = "cpu"
+INFERENCE_DEVICE_MAP_SINGLE = "single"
+
 PARSER_STATE_IN_PAYLOAD = "in_payload"
 PARSER_STATE_IN_ACTION = "in_action"
 PARSER_STATE_IN_CONTENT = "in_content"
@@ -384,8 +388,8 @@ def format_generation_token_debug(
             f"parser_state={result.parser_state_at_stop}, detail={result.termination_detail or '-'}"
         ),
         f"output_ids_len={len(result.output_ids)}, content_ids_len={len(result.content_ids)}",
-        f"output_ids={output_ids}",
-        f"content_ids={content_ids}",
+        # f"output_ids={output_ids}",
+        # f"content_ids={content_ids}",
         f"structural_hits={', '.join(structural_hits) if structural_hits else 'none'}",
         "idx token_id token_name decoded token_text kept",
     ]
@@ -398,7 +402,7 @@ def format_generation_token_debug(
                     str(token_id),
                     _token_name(token_id, encoder=encoder, tokenizer=tokenizer) or "-",
                     repr(_decode_single_token(token_id, tokenizer=tokenizer)),
-                    repr(_token_text(token_id, tokenizer=tokenizer)),
+                    # repr(_token_text(token_id, tokenizer=tokenizer)),
                     _kept_marker(index, token_id, result.content_ids),
                 ]
             )
@@ -499,6 +503,7 @@ def load_lora_inference_model(
     *,
     local_files_only: bool,
     load_in_4bit: bool,
+    inference_device_map: str = INFERENCE_DEVICE_MAP_SINGLE,
 ) -> tuple[PreTrainedTokenizerBase, PeftModel]:
     import torch
     from peft import PeftModel
@@ -509,18 +514,28 @@ def load_lora_inference_model(
         local_files_only=local_files_only,
     )
 
-    dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+    use_cuda = torch.cuda.is_available() and inference_device_map != INFERENCE_DEVICE_MAP_CPU
+    dtype = torch.bfloat16 if use_cuda else torch.float32
     model_kwargs = {
         "local_files_only": local_files_only,
         "trust_remote_code": True,
-        "device_map": "auto" if torch.cuda.is_available() else None,
         "dtype": dtype,
     }
+    if inference_device_map == INFERENCE_DEVICE_MAP_AUTO:
+        model_kwargs["device_map"] = "auto" if use_cuda else None
+    elif inference_device_map == INFERENCE_DEVICE_MAP_SINGLE:
+        model_kwargs["device_map"] = {"": 0} if use_cuda else None
+    elif inference_device_map == INFERENCE_DEVICE_MAP_CPU:
+        model_kwargs["device_map"] = None
+    else:
+        raise ValueError(f"unsupported inference_device_map: {inference_device_map!r}")
     if load_in_4bit:
         model_kwargs["quantization_config"] = BitsAndBytesConfig(load_in_4bit=True)
 
     model = AutoModelForCausalLM.from_pretrained(model_name_or_path, **model_kwargs)
     model = PeftModel.from_pretrained(model, adapter_path)
+    if inference_device_map == INFERENCE_DEVICE_MAP_CPU:
+        model = model.to("cpu")
     model.eval()
     return tokenizer, model
 

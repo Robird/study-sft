@@ -15,6 +15,9 @@ from study_sft.inference_prompts import InferencePromptConfig
 from study_sft.inference_runtime import (
     GENERATION_MODE_CONTENT,
     GENERATION_MODE_ENTRY,
+    INFERENCE_DEVICE_MAP_AUTO,
+    INFERENCE_DEVICE_MAP_CPU,
+    INFERENCE_DEVICE_MAP_SINGLE,
     SingleTurnGenerationResult,
     format_generation_result,
     format_generation_token_debug,
@@ -49,8 +52,17 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--max_new_tokens", type=int, default=256)
-    parser.add_argument("--temperature", type=float, default=0.7)
-    parser.add_argument("--top_p", type=float, default=0.9)
+    parser.add_argument("--temperature", type=float, default=0)
+    parser.add_argument("--top_p", type=float, default=1)
+    parser.add_argument(
+        "--inference_device_map",
+        choices=[INFERENCE_DEVICE_MAP_SINGLE, INFERENCE_DEVICE_MAP_AUTO, INFERENCE_DEVICE_MAP_CPU],
+        default=INFERENCE_DEVICE_MAP_SINGLE,
+        help=(
+            "`single` 默认把模型放到单张 GPU，避免 trainable token adapter 被 auto 分片；"
+            "`auto` 使用 Transformers/Accelerate 自动分片；`cpu` 强制 CPU。"
+        ),
+    )
     add_optional_bool_arg(
         parser,
         "--debug_tokens",
@@ -171,6 +183,7 @@ def main() -> None:
         args.adapter_path,
         local_files_only=args.local_files_only,
         load_in_4bit=args.load_in_4bit,
+        inference_device_map=args.inference_device_map,
     )
     encoder = AgenticContextEncoder(tokenizer)
 
