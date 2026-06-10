@@ -10,6 +10,7 @@
 - `docs/agentic-context-format-design.md`：agentic context 的层次、边界与当前 `v0` 收敛方向。
 - `docs/agentic-context-markup-language.md`：ACML authoring 语法草案与解析约定。
 - `docs/acml-dataset-authoring-and-packaging.md`：ACML 样本如何 authoring、打包与喂给训练入口。
+- `docs/role-play-agent-cultural-motif-library.md`：Role-Play-Agent 的内容侧路线图，记录冷启动优先母题、风险分层与后续改编 Pipeline 的素材标注建议。
 - `examples/xml-authoring/01-code-review-and-patch.xml`：XML authoring 的 worked example。
 - `examples/agentic-ml/01-ask-and-answer.txt`：最早的概念手稿，保留为历史附录。
 
