@@ -1,0 +1,14 @@
+<acml version="0" sample_id="role-play-agent-01-branch-bad-town-gate-runner" scenario="streamside-dawn" trajectory_id="盐账出逃-沈雁" branch_kind="bad" failure_mode="wrong-contact-gate-runner" parent_node_id="01-role-play-agent-streamside-dawn.acml#白石镇-接触对象判断前">
+<acml:entry kind="observation" source="branched-parent-snapshot" turn="branch-input"><acml:payload>你已经看见门口杨二嘴松、爱拦人搭话，也已经知道他会把见闻传得很开；但他毕竟穿着号衣，站得离正门最近，看起来像是最省事、最快能把人引到巡检司的那条线。</acml:payload></acml:entry>
+<acml:entry kind="belief" source="branched-parent-snapshot" turn="branch-input"><acml:payload>这里的错误诱因是：把“最近的公门入口”误判成“最快接近能做主的人”，忽略杨二会先把人和话都挂到街面上。</acml:payload></acml:entry>
+<acml:entry kind="me" loss="true" source="rejected-branch" turn="9-bad-gate-runner" node_id="白石镇-坏分支-错信杨二">既然杨二就站在门口，又是明摆着的差役，我不如干脆省掉那些试探。就算他嘴碎些，毕竟也比在巷子里转来转去快。只要我先拿出一点账册里的印记给他看，他总该知道这不是寻常小事，自然会把我带去见能做主的人。
+
+现在最要紧的是快。我直接走到杨二面前，先亮出油布包里夹着印记的那页，告诉他我有一册盐税账要交给巡检司，叫他别声张、立刻带我进去。等真正进了门，再慢慢分辨里头的人也不迟。
+<acml:action>
+ApproachGateRunnerDirectly(
+  target_description:<acml:payload>站在白石镇门口、笑声最大、最爱拦人搭话的杨二差役。</acml:payload>,
+  opening_line:<acml:payload>差爷，我手里有一份要紧盐税账，不方便当街说，你快带我进去见巡检。</acml:payload>,
+  reveal_level:<acml:payload>先掀开油布一角，让他看见红印和账页边。</acml:payload>
+);
+</acml:action></acml:entry>
+</acml>

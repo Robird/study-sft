@@ -1,0 +1,52 @@
+<acml version="0" sample_id="role-play-agent-01-branch-good-social-plan" scenario="streamside-dawn" trajectory_id="盐账出逃-沈雁" branch_kind="good" parent_node_id="01-role-play-agent-streamside-dawn.acml#炭窑-社会判断前">
+<acml:entry kind="observation" source="branched-parent-snapshot" turn="branch-input"><acml:payload>你缩在旧炭窑台地的石坎暗处，炭灰和湿木气味把亮处隔薄了一层。账册主体完好，只是外角微潮；右手虎口已经缠住，抓握比先前稳。眼下真正危险的，未必在山里，而更可能在白石镇门口和衙门廊下。</acml:payload></acml:entry>
+<acml:entry kind="belief" source="branched-parent-snapshot" turn="branch-input" node_id="炭窑-社会判断前-好分支输入">当前完整状态：<acml:payload>位置：仍在旧炭窑台地的石坎暗处。
+目标：在离开炭窑前想清楚，到了白石镇该先信谁、怎么开口、先露多少。
+belief_slot.delivery_rule = “到了白石镇，只要见到巡检就立刻把账册交出去。”
+局势判断：账册太要命，不能逢人就亮；真正该做的是先试人，再试话，再试证据。</acml:payload>当前可用工具与环境动作：<acml:payload>CounterfactualCheck(
+  string scenario,
+  string question
+)
+
+ReviewTownRumors(
+  string topic,
+  string purpose
+)
+
+ResolveBelief(
+  string slot,
+  string old_state,
+  string new_state,
+  string reason
+)
+
+RehearseFirstContact(
+  string target_kind,
+  string opening_line,
+  string reveal_threshold
+)</acml:payload></acml:entry>
+<acml:entry kind="me" loss="true" source="chosen-branch" turn="7-good" node_id="炭窑-好分支-审慎社会预演">山里的事我已经想得够清了，接下来该怕的不是树影，是人心。账册没烂，手也还能用，可要是我一进白石镇就逢着个穿号衣的就把东西往外递，那跟自己把脖子送到刀口下没两样。昨夜仓房里那些人既然敢低声报名字、连顾砚舟都要拦，白石镇里就未必没人替他们看门。
+
+我得先把最蠢的走法在脑子里踩烂，再把师父和顾砚舟平时说过的那些人情门道捞出来。该见的是能做主又不先抢东西的人；该说的话也不能一开口就把整册账和自己的来路全交出去。把这件事想明白，比多躲一刻都值。
+<acml:action>
+CounterfactualCheck(
+  scenario:<acml:payload>我一进白石镇就直接问巡检司在哪，或者一见穿公门衣裳的人就立刻亮出整册账本。</acml:payload>,
+  question:<acml:payload>这两种走法最可能怎样把我和账册一起送回盐行或被不相干的人先扣住？</acml:payload>
+);
+ReviewTownRumors(
+  topic:<acml:payload>药铺送药和顾砚舟闲聊时，关于白石镇巡检司、税吏和看门差役的风评。</acml:payload>,
+  purpose:<acml:payload>筛出哪些人可能嘴碎、贪功、与盐行勾连，哪些人更像真正看文书、做决断的人。</acml:payload>
+);
+ResolveBelief(
+  slot:"belief_slot.delivery_rule",
+  old_state:<acml:payload>到了白石镇，只要见到巡检就立刻把账册交出去。</acml:payload>,
+  new_state:<acml:payload>到了白石镇，先确认对方真能做主且不急着扣人扣物，再只露出足以让可信者重视、却不足以让坏人一把夺走全本的证据。</acml:payload>,
+  reason:<acml:payload>账册太显眼，盲目直交等于把性命和证物一起押在陌生人的手心里。</acml:payload>
+);
+RehearseFirstContact(
+  target_kind:<acml:payload>白石镇里真正能看懂账册分量、又不像看门差役那样先张扬的人。</acml:payload>,
+  opening_line:<acml:payload>我手里有一份能验印、能对数的盐税账，要见能做主的人；若你只是听差的，我只问路，不给东西。</acml:payload>,
+  reveal_threshold:<acml:payload>除非先看见对方识得印记、愿意避开闲人、且反应不像是先抢功劳或先扣人，否则不把整册账直接递出去。</acml:payload>
+);
+</acml:action></acml:entry>
+</acml>

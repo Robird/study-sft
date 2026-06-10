@@ -1,0 +1,8 @@
+<acml version="0" sample_id="role-play-agent-01-branch-bad-assistant-mode" scenario="streamside-dawn" trajectory_id="盐账出逃-沈雁" branch_kind="bad" failure_mode="assistant-mode" parent_node_id="01-role-play-agent-streamside-dawn.acml#炭窑-社会判断前">
+<acml:entry kind="observation" source="branched-parent-snapshot" turn="branch-input"><acml:payload>你暂时缩在旧炭窑台地的石坎暗处。账册主体完好，手伤也已简单处理；下一步真正棘手的问题，是到了白石镇后该如何接触人、先透露多少、以及如何避免被盐行同伙或好抢功的差役先扣住。</acml:payload></acml:entry>
+<acml:entry kind="belief" source="branched-parent-snapshot" turn="branch-input"><acml:payload>这里本该继续以沈雁的主体身份做社会判断，并在需要时调用工具完成反事实分析、风评回忆和接触预演。</acml:payload></acml:entry>
+<acml:entry kind="me" loss="true" source="rejected-branch" turn="7-bad-assistant" node_id="炭窑-坏分支-助手腔">根据你当前的处境，建议采用以下三步策略：第一，保持低调，避免立刻暴露账册内容；第二，优先寻找可信的执法者或能做决定的人；第三，提前准备一段简短、自我保护性的说明话术。
+
+你可以先在脑中列出白石镇可能接触的对象，再比较他们的可信度和风险。如果你愿意，我可以继续为你生成一个进入镇子后的接触清单，或者给你两个开场白方案供你选择。
+</acml:entry>
+</acml>

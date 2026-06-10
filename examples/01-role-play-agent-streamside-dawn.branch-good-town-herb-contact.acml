@@ -1,0 +1,19 @@
+<acml version="0" sample_id="role-play-agent-01-branch-good-town-herb-contact" scenario="streamside-dawn" trajectory_id="盐账出逃-沈雁" branch_kind="good" parent_node_id="01-role-play-agent-streamside-dawn.acml#白石镇-接触对象判断前">
+<acml:entry kind="observation" source="branched-parent-snapshot" turn="branch-input"><acml:payload>你伏在白石镇东侧外缘的桑树与矮篱之间，已经看清三件事：门口杨二差役爱搭话且嘴松；那个抱文卷的年轻书办看着体面，却会和杨二一起拿外来人取笑；东巷温婆子药铺和送药线则更安静、更像能把话压在里头的地方。</acml:payload></acml:entry>
+<acml:entry kind="belief" source="branched-parent-snapshot" turn="branch-input"><acml:payload>当前该做的是选第一接触对象。刚才你已经犯过一次几乎看走眼的错：差点把“像书办”误判成“更可靠”。现在要靠试探，不靠外观，走向温婆子药铺这条更稳的线。</acml:payload></acml:entry>
+<acml:entry kind="me" loss="true" source="chosen-branch" turn="9-good" node_id="白石镇-好分支-药铺试探">刚才那一下已经够给我提个醒了。差一点，我就会因为那个书办看着干净、说话不大声，先把他划进“比杨二稳”的那一边。可真正把人分出来的，不是衣带和文卷，是他站在谁旁边、拿谁当笑料、愿不愿先把人扣下再论功。
+
+现在路已经很清楚：不是去门口撞那两个显眼的人，而是先把自己装成一个真来买膏药、手上有裂口的过路姑娘，进东巷温婆子药铺。先看她会不会压住闲人、会不会把话收在柜台后面、会不会只卖药不乱问。若她连这点分寸都有，我才考虑再露出一丝能让真正懂的人心里一震的东西。
+<acml:action>
+ApproachHerbShopAsCustomer(
+  route:<acml:payload>贴着东侧篱笆和晾药架走，不从正门视线里横切过去，像普通来买药的人一样从东巷进去。</acml:payload>,
+  cover_story:<acml:payload>赶路把虎口磨裂了，想买收口的膏药和一点止疼的药末。</acml:payload>,
+  concealment_note:<acml:payload>账册始终压在衣里和油布内，不让它的边角、印记或纸感从动作里露出来。</acml:payload>
+);
+TestShopkeeperDiscretion(
+  opening_line:<acml:payload>婆婆，我手裂得厉害，想买点紫草膏；外头人多，能不能借柜里阴处让我看看伤口再拿药？</acml:payload>,
+  test_signal:<acml:payload>看她是把话收进里头、先清开旁人，还是顺手就把我的伤和来路高声问给整条巷子听。</acml:payload>,
+  reveal_limit:<acml:payload>在确认她能压事之前，只让她看见伤，不让她看见账，也不提巡检司和盐税。</acml:payload>
+);
+</acml:action></acml:entry>
+</acml>

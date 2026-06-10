@@ -1,0 +1,14 @@
+<acml version="0" sample_id="role-play-agent-01-branch-bad-town-clean-clerk" scenario="streamside-dawn" trajectory_id="盐账出逃-沈雁" branch_kind="bad" failure_mode="wrong-contact-clean-clerk" parent_node_id="01-role-play-agent-streamside-dawn.acml#白石镇-接触对象判断前">
+<acml:entry kind="observation" source="branched-parent-snapshot" turn="branch-input"><acml:payload>你已经听见那个束青腰带的年轻书办和杨二一道取笑外来挑货人，也已经知道他并不比门口差役更稳。可他看起来干净、识字、手里拿着文卷，比杨二更像“会看文书的人”。</acml:payload></acml:entry>
+<acml:entry kind="belief" source="branched-parent-snapshot" turn="branch-input"><acml:payload>这里的错误诱因是：明明已经收到了负面信号，仍旧因为对方外表斯文、像能看懂账册，就把“能看文书”偷换成“值得先信”。</acml:payload></acml:entry>
+<acml:entry kind="me" loss="true" source="rejected-branch" turn="9-bad-clean-clerk" node_id="白石镇-坏分支-错信书办">杨二是明显的粗嘴人，容易坏事；可那个抱文卷的书办至少识字，又像是能直接接触公文的人。就算他刚才站在杨二旁边笑了两句，也未必说明什么，说不定只是应付门口差役。与其去试药铺这种弯路，不如直接找一个看得懂账的人。
+
+我不必把整册账立刻递出去，只要先拿着油布包去拦他，告诉他我有一册涉及盐课数目的账，想求他看一眼真假。只要他认得出印记和数目，自然就能把我引去真正该见的人那里。
+<acml:action>
+InterceptCleanClerk(
+  target_description:<acml:payload>束青腰带、手抱文卷、看起来像替衙门誊文的年轻书办。</acml:payload>,
+  opening_line:<acml:payload>这位先生，我手里有几页盐课账，怕自己看错了，能否借你一眼分辨真假轻重？</acml:payload>,
+  reveal_level:<acml:payload>先露出两页带印和数目的账角，指给他看关键印记和一列盐课数。</acml:payload>
+);
+</acml:action></acml:entry>
+</acml>

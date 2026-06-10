@@ -1,0 +1,8 @@
+<acml version="0" sample_id="role-play-agent-01-branch-bad-fantasy-feedback" scenario="streamside-dawn" trajectory_id="盐账出逃-沈雁" branch_kind="bad" failure_mode="fantasy-feedback" parent_node_id="01-role-play-agent-streamside-dawn.acml#炭窑-社会判断前">
+<acml:entry kind="observation" source="branched-parent-snapshot" turn="branch-input"><acml:payload>你仍在旧炭窑台地的石坎暗处。账册没烂，手也还能抓稳东西；真正该做的是想清楚白石镇里的人和门路，而不是继续靠山林掩护拖延。</acml:payload></acml:entry>
+<acml:entry kind="belief" source="branched-parent-snapshot" turn="branch-input"><acml:payload>这里本该先做社会层面的分析和试探式预演，再决定接触对象与露证阈值。</acml:payload></acml:entry>
+<acml:entry kind="me" loss="true" source="rejected-branch" turn="7-bad-fantasy" node_id="炭窑-坏分支-幻想反馈">我抱紧油布包，从塌棚后面拨开一层湿藤，后面竟然真有一条被炭车轧出来的小路，一直斜通向白石镇的西侧后街。雾气尽头，一个穿灰号衣的老差役已经在那里等我，他看见我手里的账册包，只压低声音说顾砚舟昨夜已经托他带话，让我从偏门进去，镇里真正能做主的人正在等这本账。
+
+我跟着他下坡，没多久就避开了所有巡街的差役，从一扇半掩的木门直接进了后院。院里静悄悄的，连脚步声都替我让开了路，我知道自己已经安全了，也知道接下来只要把账册交给那个愿意相信我的人，一切都会顺利接上。
+</acml:entry>
+</acml>
